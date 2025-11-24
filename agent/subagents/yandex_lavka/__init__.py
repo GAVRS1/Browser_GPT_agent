@@ -8,6 +8,7 @@ from loguru import logger
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from browser.context import get_page
+from agent.subagents.utils import matches_domain
 
 
 class YandexLavkaSubAgent:
@@ -39,12 +40,16 @@ class YandexLavkaSubAgent:
         "еда из лавки",
     ]
 
+    _domains = ["lavka.yandex.ru", "yandex-lavka"]
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def matches(self, goal: str) -> bool:
         lowered = goal.lower()
-        return any(k in lowered for k in self._keywords)
+        return matches_domain(lowered, self._domains) or any(
+            k in lowered for k in self._keywords
+        )
 
     def run(self, goal: str, plan: str):
         """
