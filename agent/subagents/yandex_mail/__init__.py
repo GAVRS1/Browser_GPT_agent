@@ -8,6 +8,7 @@ import os
 from loguru import logger
 
 from browser.context import get_page
+from agent.subagents.utils import matches_domain
 from agent.subagents.yandex_mail.common import open_mailbox
 from agent.subagents.yandex_mail.read_delete import run_read_delete_flow
 from agent.subagents.yandex_mail.reply import run_reply_flow
@@ -52,12 +53,16 @@ class YandexMailSubAgent:
         "письма",
     ]
 
+    _domains = ["mail.yandex.ru", "mail.yandex.com", "mail.yandex"]
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def matches(self, goal: str) -> bool:
         lowered = goal.lower()
-        return any(k in lowered for k in self._keywords)
+        return matches_domain(lowered, self._domains) or any(
+            k in lowered for k in self._keywords
+        )
 
     def run(self, goal: str, plan: str):
         """
