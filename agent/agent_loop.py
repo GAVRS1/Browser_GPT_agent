@@ -25,6 +25,32 @@ class AttemptRecord:
     error: Optional[str] = None
 
 
+@dataclass
+class ScreenshotCache:
+    """Хранит ссылку на последний сделанный скриншот и подсказывает LLM."""
+
+    last_link: Optional[str] = None
+    _needs_reminder: bool = False
+
+    def remember(self, observation: str) -> None:
+        self.last_link = observation
+        self._needs_reminder = True
+
+    def reminder_message(self) -> Optional[Dict[str, str]]:
+        if not (self.last_link and self._needs_reminder):
+            return None
+
+        self._needs_reminder = False
+        return {
+            "role": "system",
+            "content": (
+                "Последний скриншот уже есть: "
+                f"{self.last_link}. Если нужно смотреть изображение, "
+                "используй эту же ссылку вместо нового вызова take_screenshot."
+            ),
+        }
+
+
 _state_lock = threading.Lock()
 _state: Dict[str, Any] = {
     "busy": False,
@@ -393,6 +419,7 @@ def _autonomous_browse(
 
     toolbox = BrowserToolbox()
     observation = toolbox.read_view()
+    screenshot_cache = ScreenshotCache()
     actions: List[str] = []
 
     # АНТИ-ЗАЦИКЛИВАНИЕ
@@ -475,6 +502,8 @@ def _autonomous_browse(
         "  read_view недостаточно: непонятна раскладка, элементы ведут себя странно,\n"
         "  кажется, что карточки есть визуально, но их нет в product_cards и т.п.\n"
         "- Скриншот помогает \"посмотреть глазами\", но не нужно вызывать его на каждом шаге.\n"
+        "- Если скриншот уже сделан, повторно используй путь к нему из истории шага,\n"
+        "  не вызывая инструмент заново без причины.\n"
         "\n"
         "В конце обязательно дай финальный отчёт о сделанных шагах и результате.\n"
     )
@@ -494,6 +523,10 @@ def _autonomous_browse(
 
     # Лимит шагов, чтобы не крутиться бесконечно
     for step_idx in range(30):
+        reminder = screenshot_cache.reminder_message()
+        if reminder:
+            messages.append(reminder)
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
@@ -542,6 +575,10 @@ def _autonomous_browse(
 
                 formatted = format_tool_observation(result)
                 actions.append(formatted)
+
+                if result.name == "take_screenshot" and result.success:
+                    screenshot_cache.remember(result.observation)
+                    actions.append(f"last_screenshot_cached: {screenshot_cache.last_link}")
 
                 if DEBUG_THOUGHTS:
                     print(f"🛠 {short_line}")
