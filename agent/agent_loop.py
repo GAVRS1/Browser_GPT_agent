@@ -531,8 +531,18 @@ def _autonomous_browse(
                 logger.info(
                     f"[agent] Using tool: {call.function.name} args={call.function.arguments}"
                 )
+
+                # ВЫПОЛНЯЕМ инструмент до использования result
+                args = json.loads(call.function.arguments or "{}")
+                result = toolbox.execute(call.function.name, args)
+
+                # Краткая строка результата
                 short_line = f"{result.name}: {'ok' if result.success else 'fail'}"
                 actions.append(short_line)
+
+                formatted = format_tool_observation(result)
+                actions.append(formatted)
+
                 if DEBUG_THOUGHTS:
                     print(f"🛠 {short_line}")
                     print(f"   Аргументы: {call.function.arguments}")
@@ -547,14 +557,6 @@ def _autonomous_browse(
                     if DEBUG_THOUGHTS:
                         print("⚠ " + msg)
                     return "failed", msg
-
-                args = json.loads(call.function.arguments or "{}")
-                result = toolbox.execute(call.function.name, args)
-                formatted = format_tool_observation(result)
-                actions.append(formatted)
-
-                if DEBUG_THOUGHTS:
-                    print(f"🛠 {short_line}")
 
                 # Проверяем, изменилось ли наблюдение (DOM / состояние)
                 if result.observation and result.observation != last_observation:
