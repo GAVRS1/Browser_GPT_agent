@@ -496,12 +496,26 @@ class BrowserToolbox:
         if _looks_like_css(query):
             strategies.append(page.locator(query))
 
-        candidate = _first_visible(strategies)
+        candidates, candidate = _collect_candidates_for_logging(strategies)
+
+        result_message = ""
         if candidate:
             candidate.click(timeout=2000)
-            return f"Клик по {query} выполнен"
+            result_message = f"Клик по {query} выполнен"
+            chosen_summary = _describe_locator(candidate)
+        else:
+            result_message = f"Не нашёл, куда кликнуть по запросу: {query}"
+            chosen_summary = ""
 
-        return f"Не нашёл, куда кликнуть по запросу: {query}"
+        _log_interaction(
+            action="click",
+            query=query,
+            candidates=candidates,
+            chosen_summary=chosen_summary,
+            result=result_message,
+        )
+
+        return result_message
 
     def type_text(self, query: str, text: str, press_enter: bool = False) -> str:
         if not query:
@@ -517,37 +531,85 @@ class BrowserToolbox:
                 direct_locator.fill(text, timeout=2000)
                 if press_enter:
                     direct_locator.press("Enter")
-                return (
+                result_message = (
                     "Нашёл поле поиска по общим атрибутам (placeholder/aria-label/name) "
                     f"и ввёл запрос '{query}'."
                 )
+                _log_interaction(
+                    action="type_text",
+                    query=query,
+                    candidates=[{
+                        "summary": _describe_locator(direct_locator),
+                        "visible": True,
+                    }],
+                    chosen_summary=_describe_locator(direct_locator),
+                    result=result_message,
+                )
+                return result_message
 
             vision_hint = self._vision_locate_input(query)
             if vision_hint:
                 applied = self._apply_vision_hint(vision_hint, text, press_enter)
                 if applied:
-                    return (
+                    result_message = (
                         f"Ввёл текст через vision-fallback для запроса '{query}'. "
                         f"Основание: {vision_hint.reason or 'подсказка модели'}"
                     )
+                    candidates = _vision_candidates_for_logging(vision_hint)
+                    _log_interaction(
+                        action="type_text-vision",
+                        query=query,
+                        candidates=candidates,
+                        chosen_summary=_describe_locator_from_hint(vision_hint),
+                        result=result_message,
+                    )
+                    return result_message
 
         candidate = self._find_text_locator(query)
         if candidate:
             candidate.fill(text, timeout=2000)
             if press_enter:
                 candidate.press("Enter")
-            return f"Ввёл текст в поле {query}"
+            result_message = f"Ввёл текст в поле {query}"
+            _log_interaction(
+                action="type_text",
+                query=query,
+                candidates=[{
+                    "summary": _describe_locator(candidate),
+                    "visible": True,
+                }],
+                chosen_summary=_describe_locator(candidate),
+                result=result_message,
+            )
+            return result_message
 
         vision_hint = self._vision_locate_input(query)
         if vision_hint:
             applied = self._apply_vision_hint(vision_hint, text, press_enter)
             if applied:
-                return (
+                result_message = (
                     f"Ввёл текст через vision-fallback для запроса '{query}'. "
                     f"Основание: {vision_hint.reason or 'подсказка модели'}"
                 )
+                candidates = _vision_candidates_for_logging(vision_hint)
+                _log_interaction(
+                    action="type_text-vision",
+                    query=query,
+                    candidates=candidates,
+                    chosen_summary=_describe_locator_from_hint(vision_hint),
+                    result=result_message,
+                )
+                return result_message
 
-        return f"Не удалось найти поле для ввода по запросу: {query}"
+        result_message = f"Не удалось найти поле для ввода по запросу: {query}"
+        _log_interaction(
+            action="type_text",
+            query=query,
+            candidates=[],
+            chosen_summary="",
+            result=result_message,
+        )
+        return result_message
 
     def _find_text_locator(self, query: str) -> Optional[Locator]:
         page = self.page
@@ -582,6 +644,13 @@ class BrowserToolbox:
         client = get_client()
         if client is None:
             logger.warning("[vision] Vision fallback skipped: OpenAI client недоступен")
+            _log_interaction(
+                action="vision_locate_input",
+                query=query,
+                candidates=[],
+                chosen_summary="",
+                result="vision client unavailable",
+            )
             return None
 
         screenshot_path, image_bytes = self._capture_screenshot_bytes()
@@ -630,14 +699,31 @@ class BrowserToolbox:
         content = response.choices[0].message.content if response.choices else ""
         hint = _parse_vision_hint(content)
         if hint:
-            logger.info(
+            vision_candidates = _vision_candidates_for_logging(hint)
+            summary = _describe_locator_from_hint(hint)
+            result_message = (
                 f"[vision] Использован vision-fallback для '{query}' (screenshot: {screenshot_path}). "
                 f"reason: {hint.reason or 'не указана'}"
             )
+            _log_interaction(
+                action="vision_locate_input",
+                query=query,
+                candidates=vision_candidates,
+                chosen_summary=summary,
+                result=result_message,
+            )
+            logger.info(result_message)
             return hint
 
         logger.warning(
             f"[vision] Не удалось распарсить ответ vision для запроса '{query}': {content}"
+        )
+        _log_interaction(
+            action="vision_locate_input",
+            query=query,
+            candidates=[],
+            chosen_summary="",
+            result=f"vision hint parse failed for '{query}'",
         )
         return None
 
@@ -949,6 +1035,96 @@ def _looks_like_css(query: str) -> bool:
     return query.startswith(".") or query.startswith("#") or query.startswith("[")
 
 
+def _truncate(value: str, limit: int = 160) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3] + "..."
+
+
+def _describe_locator(locator: Optional[Locator]) -> str:
+    if locator is None:
+        return ""
+
+    parts: List[str] = []
+
+    with contextlib.suppress(Exception):
+        tag = locator.evaluate("el => el.tagName.toLowerCase()") or ""
+        if tag:
+            parts.append(f"<{tag}>")
+
+    with contextlib.suppress(Exception):
+        text = locator.inner_text(timeout=800) or ""
+        text = _truncate(re.sub(r"\s+", " ", text.strip()))
+        if text:
+            parts.append(f"text='{text}'")
+
+    attrs = _collect_attributes(locator)
+    if attrs:
+        rendered_attrs = ", ".join(
+            f"{k}={_truncate(v, 40)}" for k, v in list(attrs.items())[:4]
+        )
+        parts.append(f"attrs({rendered_attrs})")
+
+    return " | ".join(parts) or "locator"
+
+
+def _collect_candidates_for_logging(
+    locators: Iterable[Locator],
+    limit: int = 5,
+) -> tuple[list[Dict[str, Any]], Optional[Locator]]:
+    seen: set[str] = set()
+    candidates: list[Dict[str, Any]] = []
+    chosen: Optional[Locator] = None
+
+    for locator in locators:
+        candidate: Optional[Locator] = None
+        key = repr(locator)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        with contextlib.suppress(Exception):
+            candidate = locator.first
+        if candidate is None:
+            continue
+
+        visible = False
+        with contextlib.suppress(Exception):
+            visible = candidate.is_visible(timeout=1500)
+
+        summary = _describe_locator(candidate)
+        candidates.append({"summary": summary, "visible": visible})
+
+        if chosen is None and visible:
+            chosen = candidate
+
+        if len(candidates) >= limit:
+            break
+
+    return candidates, chosen
+
+
+def _log_interaction(
+    *,
+    action: str,
+    query: str,
+    candidates: list[Dict[str, Any]],
+    chosen_summary: str,
+    result: str,
+) -> None:
+    payload = {
+        "action": action,
+        "query": _truncate(query, 160),
+        "candidates": [
+            {"summary": _truncate(item.get("summary", ""), 200), "visible": bool(item.get("visible", False))}
+            for item in candidates[:8]
+        ],
+        "chosen": _truncate(chosen_summary or "", 200),
+        "result": _truncate(result, 200),
+    }
+    logger.info(f"[trace] {json.dumps(payload, ensure_ascii=False)}")
+
+
 def _looks_like_search_intent(query: str) -> bool:
     cleaned = query.lower().strip()
     return bool(re.search(r"\b(поиск|search|найти)\b", cleaned))
@@ -1173,6 +1349,45 @@ def _parse_vision_hint(content: str) -> Optional[VisionHint]:
     tab_steps = data.get("tab_steps") or 0
     reason = data.get("reason") or ""
     return VisionHint(selector=selector, click=click, tab_steps=tab_steps, reason=reason)
+
+
+def _describe_locator_from_hint(hint: Optional[VisionHint]) -> str:
+    if hint is None:
+        return ""
+
+    parts: list[str] = []
+    if hint.selector:
+        parts.append(f"selector='{_truncate(hint.selector, 80)}'")
+    if hint.click:
+        coords = hint.click
+        x = coords.get("x")
+        y = coords.get("y")
+        parts.append(f"coords=({x}, {y})")
+    if hint.tab_steps:
+        parts.append(f"tab_steps={hint.tab_steps}")
+    if hint.reason:
+        parts.append(f"reason='{_truncate(hint.reason, 80)}'")
+    return " | ".join(parts)
+
+
+def _vision_candidates_for_logging(hint: Optional[VisionHint]) -> list[Dict[str, Any]]:
+    if hint is None:
+        return []
+
+    candidates: list[Dict[str, Any]] = []
+    if hint.selector:
+        candidates.append({"summary": f"selector: {hint.selector}", "visible": False})
+    if hint.click:
+        coords = hint.click
+        candidates.append(
+            {
+                "summary": f"coords: x={coords.get('x')}, y={coords.get('y')}",
+                "visible": True,
+            }
+        )
+    if hint.tab_steps:
+        candidates.append({"summary": f"tab navigation: {hint.tab_steps}", "visible": True})
+    return candidates
 
 
 def _css_escape(value: str) -> str:
