@@ -5,6 +5,7 @@ import json
 import base64
 import re
 import textwrap
+from urllib.parse import parse_qs, unquote, urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -730,6 +731,8 @@ class BrowserToolbox:
 
         page = self.page
 
+        search_tokens = _collect_search_tokens(page)
+
         # 1) Обработка страницы рецепта Яндекс Лавки
         try:
             url = page.url or ""
@@ -811,35 +814,72 @@ class BrowserToolbox:
                     re.search(r"\d+\s*мин", inner, re.IGNORECASE)
                 )
 
-                score = area
-                if has_price:
-                    score += 50000
-                if has_title:
-                    score += 15000
-                if is_recipe:
-                    score -= 40000  # рецепты понижаем в приоритете
+                add_button = _find_add_button(el)
+                add_button_present = add_button is not None
 
-                candidates.append((score, el))
+                token_matches = _count_token_matches(inner, search_tokens)
+                score = _compute_card_score(
+                    area=area,
+                    has_price=has_price,
+                    has_title=has_title,
+                    is_recipe=is_recipe,
+                    has_add_button=add_button_present,
+                    token_matches=token_matches,
+                )
+
+                candidates.append(
+                    {
+                        "score": score,
+                        "locator": el,
+                        "add_button": add_button,
+                        "text": inner,
+                        "matches": token_matches,
+                    }
+                )
             except Exception:
                 continue
 
         if not candidates:
             return "Не удалось найти карточку товара."
 
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        best = candidates[0][1]
+        candidates.sort(key=lambda x: x["score"], reverse=True)
 
-        try:
-            best.scroll_into_view_if_needed()
-        except Exception:
-            pass
+        failure_reasons: list[str] = []
+        for cand in candidates:
+            before_state = _snapshot_page_state(page)
 
-        try:
-            best.click(timeout=4000, force=True)
-            return "Кликнул по карточке товара."
-        except Exception as exc:
-            logger.error(f"[tools] click_product_card: click failed: {exc}")
-            return f"Не удалось кликнуть по карточке: {exc}"
+            try:
+                cand["locator"].scroll_into_view_if_needed()
+            except Exception:
+                pass
+
+            clicked = False
+            for target in [cand.get("add_button"), cand.get("locator")]:
+                if not target:
+                    continue
+                try:
+                    target.click(timeout=4000, force=True)
+                    clicked = True
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        f"[tools] click_product_card: click failed for candidate: {exc}"
+                    )
+
+            if not clicked:
+                failure_reasons.append("клик не сработал")
+                continue
+
+            time.sleep(1)
+            after_state = _snapshot_page_state(page)
+            if _state_changed(before_state, after_state):
+                return "Кликнул по карточке товара."
+
+            failure_reasons.append("клик не изменил состояние")
+            # Пытаемся следующую карточку
+
+        details = "; ".join(failure_reasons) or "кандидаты не подошли"
+        return f"Не удалось выбрать карточку товара: {details}."
 
 
 def safe_title(page: Page) -> str:
@@ -895,6 +935,144 @@ def _first_visible(locators: Iterable[Locator]) -> Optional[Locator]:
             if candidate.is_visible(timeout=1500):
                 return candidate
     return None
+
+
+def _tokenize(text: str) -> list[str]:
+    words = re.findall(r"[\w']+", text.lower())
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for w in words:
+        if len(w) < 2:
+            continue
+        if w in seen:
+            continue
+        seen.add(w)
+        tokens.append(w)
+    return tokens
+
+
+def _extract_search_tokens_from_url(url: str) -> list[str]:
+    tokens: list[str] = []
+    parsed = urlparse(url)
+    query_params = parse_qs(parsed.query)
+    for key in ["text", "query", "q", "search", "keyword", "term", "s"]:
+        for value in query_params.get(key, []):
+            tokens.extend(_tokenize(unquote(value)))
+
+    # Попытка достать поисковый текст из последней части пути
+    path_chunks = [chunk for chunk in parsed.path.split("/") if chunk]
+    if path_chunks:
+        tail = unquote(path_chunks[-1])
+        tokens.extend(_tokenize(tail))
+
+    seen: set[str] = set()
+    unique_tokens: list[str] = []
+    for tok in tokens:
+        if tok in seen:
+            continue
+        seen.add(tok)
+        unique_tokens.append(tok)
+    return unique_tokens
+
+
+def _collect_search_tokens(page: Page) -> list[str]:
+    tokens: list[str] = []
+    with contextlib.suppress(Exception):
+        tokens.extend(_extract_search_tokens_from_url(page.url or ""))
+
+    try:
+        search_inputs = page.locator("input[type='search'], input[name*='search'], input[name*='text']")
+        total = search_inputs.count()
+    except Exception:
+        total = 0
+
+    max_inputs = min(total, 3)
+    for i in range(max_inputs):
+        locator = search_inputs.nth(i)
+        with contextlib.suppress(Exception):
+            value = locator.input_value(timeout=800) or ""
+            tokens.extend(_tokenize(value))
+
+    seen: set[str] = set()
+    unique_tokens: list[str] = []
+    for tok in tokens:
+        if tok in seen:
+            continue
+        seen.add(tok)
+        unique_tokens.append(tok)
+    return unique_tokens
+
+
+def _count_token_matches(text: str, tokens: list[str]) -> int:
+    lowered = text.lower()
+    return sum(1 for tok in tokens if tok and tok in lowered)
+
+
+def _compute_card_score(
+    *,
+    area: float,
+    has_price: bool,
+    has_title: bool,
+    is_recipe: bool,
+    has_add_button: bool,
+    token_matches: int,
+) -> float:
+    score = area
+    if has_price:
+        score += 50000
+    if has_title:
+        score += 15000
+    if has_add_button:
+        score += 60000
+    if token_matches:
+        score += 70000 * token_matches
+    if is_recipe:
+        score -= 40000
+    return score
+
+
+def _find_add_button(container: Locator) -> Optional[Locator]:
+    try:
+        button = container.locator("button, [role='button']").filter(
+            has_text=re.compile(
+                r"(в корзину|добавить|купить|в\s*корзине|add to cart|add|куплено|\+)",
+                re.IGNORECASE,
+            )
+        )
+        if button.count() > 0 and button.first.is_enabled(timeout=800):
+            return button.first
+    except Exception:
+        return None
+    return None
+
+
+def _snapshot_page_state(page: Page) -> dict:
+    state = {
+        "url": "",
+        "cart": "",
+        "dom_len": 0,
+    }
+    with contextlib.suppress(Exception):
+        state["url"] = page.url or ""
+    with contextlib.suppress(Exception):
+        cart_locator = page.get_by_text(re.compile("корзин|basket|cart", re.IGNORECASE))
+        if cart_locator and cart_locator.count() > 0:
+            state["cart"] = _safe_text(cart_locator.first)
+    with contextlib.suppress(Exception):
+        content = page.content()
+        if content:
+            state["dom_len"] = len(content)
+    return state
+
+
+def _state_changed(before: dict, after: dict) -> bool:
+    if before.get("url") != after.get("url"):
+        return True
+    if before.get("cart") != after.get("cart") and (before.get("cart") or after.get("cart")):
+        return True
+    if abs(after.get("dom_len", 0) - before.get("dom_len", 0)) > 50:
+        return True
+    return False
 
 
 def _extract_json_block(text: str) -> Optional[str]:
