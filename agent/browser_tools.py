@@ -2,6 +2,7 @@ from __future__ import annotations
 import time
 import contextlib
 import json
+import base64
 import re
 import textwrap
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from loguru import logger
 from playwright.sync_api import Locator, Page
 
 from browser.context import get_page
+from agent.llm_client import get_client
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +26,14 @@ class ToolResult:
     name: str
     success: bool
     observation: str
+
+
+@dataclass
+class VisionHint:
+    selector: Optional[str] = None
+    click: Optional[Dict[str, float]] = None
+    tab_steps: int = 0
+    reason: str = ""
 
 
 class BrowserToolbox:
@@ -485,6 +495,26 @@ class BrowserToolbox:
     def type_text(self, query: str, text: str, press_enter: bool = False) -> str:
         if not query:
             return "Нет запроса для ввода"
+
+        candidate = self._find_text_locator(query)
+        if candidate:
+            candidate.fill(text, timeout=2000)
+            if press_enter:
+                candidate.press("Enter")
+            return f"Ввёл текст в поле {query}"
+
+        vision_hint = self._vision_locate_input(query)
+        if vision_hint:
+            applied = self._apply_vision_hint(vision_hint, text, press_enter)
+            if applied:
+                return (
+                    f"Ввёл текст через vision-fallback для запроса '{query}'. "
+                    f"Основание: {vision_hint.reason or 'подсказка модели'}"
+                )
+
+        return f"Не удалось найти поле для ввода по запросу: {query}"
+
+    def _find_text_locator(self, query: str) -> Optional[Locator]:
         page = self.page
         strategies: List[Locator] = []
 
@@ -504,14 +534,112 @@ class BrowserToolbox:
         if _looks_like_css(query):
             strategies.append(page.locator(query))
 
-        candidate = _first_visible(strategies)
-        if candidate:
-            candidate.fill(text, timeout=2000)
-            if press_enter:
-                candidate.press("Enter")
-            return f"Ввёл текст в поле {query}"
+        return _first_visible(strategies)
 
-        return f"Не удалось найти поле для ввода по запросу: {query}"
+    def _capture_screenshot_bytes(self) -> tuple[str, bytes]:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        path = SCREENSHOTS_DIR / f"vision_fallback_{timestamp}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image_bytes = self.page.screenshot(path=str(path), full_page=False)
+        return str(path), image_bytes
+
+    def _vision_locate_input(self, query: str) -> Optional[VisionHint]:
+        client = get_client()
+        if client is None:
+            logger.warning("[vision] Vision fallback skipped: OpenAI client недоступен")
+            return None
+
+        screenshot_path, image_bytes = self._capture_screenshot_bytes()
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+        prompt = textwrap.dedent(
+            f"""
+            Ты помогатель для браузерного агента. На скриншоте страница. Надо найти поле
+            ввода/поиска соответствующее запросу: "{query}".
+
+            Ответь строго JSON с полями:
+            - selector: короткий CSS/ARIA, если можно надёжно сослаться на элемент без хардкодов.
+            - click: объект {{"x": number, "y": number}} — координаты клика по видимому полю.
+            - tab_steps: количество нажатий Tab, чтобы сфокусировать поле, если координаты не подходят.
+            - reason: краткое объяснение, почему выбран именно этот вариант.
+
+            Если уверен в селекторе — заполни selector и не указывай click.
+            Если селектора нет, укажи только click.
+            Минимизируй галлюцинации: используй только то, что видно на скриншоте.
+            """
+        ).strip()
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",  # vision-поддержка
+                messages=[
+                    {"role": "system", "content": "Ты помогаешь роботу найти поле ввода."},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{base64_image}"},
+                            },
+                        ],
+                    },
+                ],
+                max_tokens=300,
+                temperature=0.1,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[vision] Vision fallback failed: {exc}")
+            return None
+
+        content = response.choices[0].message.content if response.choices else ""
+        hint = _parse_vision_hint(content)
+        if hint:
+            logger.info(
+                f"[vision] Использован vision-fallback для '{query}' (screenshot: {screenshot_path}). "
+                f"reason: {hint.reason or 'не указана'}"
+            )
+            return hint
+
+        logger.warning(
+            f"[vision] Не удалось распарсить ответ vision для запроса '{query}': {content}"
+        )
+        return None
+
+    def _apply_vision_hint(self, hint: VisionHint, text: str, press_enter: bool) -> bool:
+        page = self.page
+
+        if hint.selector:
+            locator = _first_visible([page.locator(hint.selector)])
+            if locator:
+                locator.click(timeout=2000)
+                locator.fill(text, timeout=2000)
+                if press_enter:
+                    locator.press("Enter")
+                return True
+
+        if hint.click and {"x", "y"}.issubset(hint.click):
+            try:
+                x = float(hint.click.get("x", 0))
+                y = float(hint.click.get("y", 0))
+                page.mouse.click(x, y)
+                page.keyboard.type(text)
+                if press_enter:
+                    page.keyboard.press("Enter")
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"[vision] Ошибка клика по координатам {hint.click}: {exc}")
+
+        if hint.tab_steps:
+            steps = max(0, int(hint.tab_steps))
+            for _ in range(steps):
+                page.keyboard.press("Tab")
+            page.keyboard.type(text)
+            if press_enter:
+                page.keyboard.press("Enter")
+            return steps > 0
+
+        return False
 
     def scroll(self, direction: str = "down", amount: int = 800) -> str:
         """
@@ -757,6 +885,32 @@ def _first_visible(locators: Iterable[Locator]) -> Optional[Locator]:
             if candidate.is_visible(timeout=1500):
                 return candidate
     return None
+
+
+def _extract_json_block(text: str) -> Optional[str]:
+    if not text:
+        return None
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    return text[start : end + 1]
+
+
+def _parse_vision_hint(content: str) -> Optional[VisionHint]:
+    raw_json = _extract_json_block(content)
+    if not raw_json:
+        return None
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+
+    selector = data.get("selector") or None
+    click = data.get("click") if isinstance(data.get("click"), dict) else None
+    tab_steps = data.get("tab_steps") or 0
+    reason = data.get("reason") or ""
+    return VisionHint(selector=selector, click=click, tab_steps=tab_steps, reason=reason)
 
 
 def _css_escape(value: str) -> str:
