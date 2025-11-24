@@ -10,6 +10,7 @@ from loguru import logger
 from playwright.sync_api import Page
 
 from browser.context import get_page
+from agent.subagents.utils import matches_domain
 from agent.browser_tools import BrowserToolbox, format_tool_observation
 from agent.llm_client import get_client
 from agent.tools_init import dom_snapshot
@@ -60,6 +61,15 @@ class HhRuSubAgent:
     """
 
     name: str = "HeadHunter"
+
+    _domains = ["hh.ru", "headhunter"]
+    _keywords = ["hh.ru", "headhunter", "ваканси", "резюме", "hh"]
+
+    def matches(self, goal: str) -> bool:
+        lowered = goal.lower()
+        return matches_domain(lowered, self._domains) or any(
+            k in lowered for k in self._keywords
+        )
 
     def run(self, goal: str, plan: str) -> SubAgentResult:
         _log_thought(f"Новая задача для hh.ru:\n{goal}\n\nПлан верхнего уровня:\n{plan}")
