@@ -189,9 +189,8 @@ class HhRuSubAgent:
         if observation:
             messages.append(
                 {
-                    "role": "tool",
-                    "name": "read_view",
-                    "content": observation,
+                    "role": "assistant",
+                    "content": f"Начальный снимок страницы (read_view):\n{observation}",
                 }
             )
 

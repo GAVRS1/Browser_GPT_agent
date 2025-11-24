@@ -547,16 +547,18 @@ def _autonomous_browse(
                     print(f"🛠 {short_line}")
                     print(f"   Аргументы: {call.function.arguments}")
 
-                # Если 3 раза подряд одно и то же действие — считаем, что застрял
+                loop_guard_triggered = False
+
+                # Если 3 раза подряд одно и то же действие — предупреждаем модель и даём шанс перепланировать
                 if len(recent_signatures) >= 3 and len(set(recent_signatures[-3:])) == 1:
                     msg = (
-                        "Агент три раза подряд выполнил одно и то же действие и остановился, "
-                        "чтобы не зациклиться. Скорее всего, нужный элемент на странице не меняет состояние "
-                        "или его нет. Попробуйте переформулировать задачу или указать другой элемент."
+                        "Замечено повторение одного и того же действия трижды подряд — "
+                        "скорее всего, страница не меняется. Попробуй другой шаг или уточни цель."
                     )
-                    if DEBUG_THOUGHTS:
-                        print("⚠ " + msg)
-                    return "failed", msg
+                    logger.warning("[agent] Loop guard triggered: repeating the same action thrice")
+                    messages.append({"role": "assistant", "content": msg})
+                    recent_signatures.clear()
+                    loop_guard_triggered = True
 
                 # Проверяем, изменилось ли наблюдение (DOM / состояние)
                 if result.observation and result.observation != last_observation:
@@ -570,6 +572,10 @@ def _autonomous_browse(
                         "content": result.observation,
                     }
                 )
+
+            if loop_guard_triggered:
+                no_progress_steps = max(no_progress_steps, 1)
+                continue
 
             if step_made_progress:
                 no_progress_steps = 0
@@ -684,12 +690,10 @@ def run_agent(goal: str) -> None:
 
         _set_status(last_report=tool_details)
 
-        if tool_status == "completed":
+        # Оставляем итоговый статус работы с инструментами и не выполняем
+        # автоматический переход на страницу поиска, чтобы не менять контекст задачи.
+        if tool_status in {"completed", "needs_input", "failed"}:
             return
-
-        url = _safe_navigation(goal)
-        record.status = "fallback_navigation"
-        record.details = tool_details + f"\n\nПерешёл на страницу поиска: {url}"
 
     except Exception as exc:  # noqa: BLE001
         logger.error(f"[agent] Fatal error while running goal '{goal}': {exc}")
