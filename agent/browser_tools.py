@@ -6,7 +6,7 @@ import re
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from loguru import logger
 from playwright.sync_api import Locator, Page
@@ -40,8 +40,8 @@ class BrowserToolbox:
       необходимости может ещё раз запросить скрин/другой участок.
     """
 
-    def __init__(self) -> None:
-        self.page: Page = get_page()
+    def __init__(self, page: Optional[Page] = None) -> None:
+        self.page: Page = page or get_page()
 
     # ------------------------------------------------------------
     # OpenAI tool schemas
@@ -282,6 +282,7 @@ class BrowserToolbox:
             ("button", page.get_by_role("button")),
             ("link", page.get_by_role("link")),
             ("textbox", page.get_by_role("textbox")),
+            ("searchbox", page.get_by_role("searchbox")),
             ("combobox", page.get_by_role("combobox")),
             ("listitem", page.get_by_role("listitem")),
         ]
@@ -295,13 +296,17 @@ class BrowserToolbox:
             for idx in range(min(count, 8)):
                 item = locator.nth(idx)
                 text = _safe_text(item)
-                if not text:
+                attrs = _collect_attributes(item)
+                combined_text = text or attrs.get("aria_label") or attrs.get("placeholder")
+                combined_text = combined_text or attrs.get("name") or attrs.get("id")
+                if not combined_text and not attrs:
                     continue
                 interactive.append(
                     {
                         "role": role_name,
-                        "text": text[:160],
+                        "text": (combined_text or "")[:160],
                         "locator": f"role={role_name}, idx={idx}",
+                        "attrs": attrs,
                     }
                 )
 
@@ -452,21 +457,28 @@ class BrowserToolbox:
             return "Пустой запрос — клик не выполнен"
 
         page = self.page
-        strategies = [
-            page.get_by_role("button", name=re.compile(query, re.IGNORECASE)),
-            page.get_by_role("link", name=re.compile(query, re.IGNORECASE)),
-            page.get_by_text(query, exact=False),
-        ]
+        strategies: List[Locator] = []
+
+        if _looks_like_search_intent(query):
+            strategies.extend(_search_locators(page, query, include_text_inputs=True))
+
+        strategies.extend(
+            [
+                page.get_by_role("button", name=re.compile(query, re.IGNORECASE)),
+                page.get_by_role("link", name=re.compile(query, re.IGNORECASE)),
+                page.get_by_text(query, exact=False),
+            ]
+        )
+
+        strategies.extend(_attribute_locators(page, query, tags=["button", "a", "input", "summary", "div", "span"]))
 
         if _looks_like_css(query):
             strategies.append(page.locator(query))
 
-        for locator in strategies:
-            with contextlib.suppress(Exception):
-                candidate = locator.first
-                if candidate.is_visible(timeout=1500):
-                    candidate.click(timeout=2000)
-                    return f"Клик по {query} выполнен"
+        candidate = _first_visible(strategies)
+        if candidate:
+            candidate.click(timeout=2000)
+            return f"Клик по {query} выполнен"
 
         return f"Не нашёл, куда кликнуть по запросу: {query}"
 
@@ -474,23 +486,30 @@ class BrowserToolbox:
         if not query:
             return "Нет запроса для ввода"
         page = self.page
-        strategies: List[Locator] = [
-            page.get_by_label(query, exact=False),
-            page.get_by_placeholder(query, exact=False),
-            page.get_by_text(query, exact=False),
-        ]
+        strategies: List[Locator] = []
+
+        if _looks_like_search_intent(query):
+            strategies.extend(_search_locators(page, query, include_text_inputs=True))
+
+        strategies.extend(
+            [
+                page.get_by_label(query, exact=False),
+                page.get_by_placeholder(query, exact=False),
+                page.get_by_text(query, exact=False),
+            ]
+        )
+
+        strategies.extend(_attribute_locators(page, query, tags=["input", "textarea", "select"]))
 
         if _looks_like_css(query):
             strategies.append(page.locator(query))
 
-        for locator in strategies:
-            with contextlib.suppress(Exception):
-                candidate = locator.first
-                if candidate.is_visible(timeout=1500):
-                    candidate.fill(text, timeout=2000)
-                    if press_enter:
-                        candidate.press("Enter")
-                    return f"Ввёл текст в поле {query}"
+        candidate = _first_visible(strategies)
+        if candidate:
+            candidate.fill(text, timeout=2000)
+            if press_enter:
+                candidate.press("Enter")
+            return f"Ввёл текст в поле {query}"
 
         return f"Не удалось найти поле для ввода по запросу: {query}"
 
@@ -699,8 +718,97 @@ def _safe_text(locator: Locator) -> str:
     return ""
 
 
+def _collect_attributes(locator: Locator) -> Dict[str, str]:
+    attrs: Dict[str, str] = {}
+    for attr, key in [
+        ("aria-label", "aria_label"),
+        ("aria-labelledby", "aria_labelledby"),
+        ("placeholder", "placeholder"),
+        ("name", "name"),
+        ("id", "id"),
+        ("type", "type"),
+        ("role", "role"),
+    ]:
+        with contextlib.suppress(Exception):
+            value = locator.get_attribute(attr) or ""
+            if value:
+                attrs[key] = value[:200]
+    return attrs
+
+
 def _looks_like_css(query: str) -> bool:
     return query.startswith(".") or query.startswith("#") or query.startswith("[")
+
+
+def _looks_like_search_intent(query: str) -> bool:
+    cleaned = query.lower().strip()
+    return bool(re.search(r"\b(поиск|search|найти)\b", cleaned))
+
+
+def _first_visible(locators: Iterable[Locator]) -> Optional[Locator]:
+    seen: set[str] = set()
+    for locator in locators:
+        key = repr(locator)
+        if key in seen:
+            continue
+        seen.add(key)
+        with contextlib.suppress(Exception):
+            candidate = locator.first
+            if candidate.is_visible(timeout=1500):
+                return candidate
+    return None
+
+
+def _css_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _attribute_locators(page: Page, query: str, tags: List[str]) -> List[Locator]:
+    safe = _css_escape(query)
+    attributes = [
+        "aria-label",
+        "aria-labelledby",
+        "placeholder",
+        "name",
+        "id",
+        "type",
+        "title",
+    ]
+    locators: List[Locator] = []
+    for attr in attributes:
+        selectors = [f"{tag}[{attr}*=\"{safe}\" i]" for tag in tags]
+        locators.append(page.locator(",".join(selectors)))
+    return locators
+
+
+def _search_locators(page: Page, query: str, include_text_inputs: bool = False) -> List[Locator]:
+    safe = _css_escape(query)
+    locators: List[Locator] = [page.get_by_role("searchbox")]
+
+    search_keywords = ["поиск", "search", "найти"]
+    keyword_selectors = []
+    for kw in search_keywords:
+        kw_safe = _css_escape(kw)
+        keyword_selectors.append(f"input[placeholder*=\"{kw_safe}\" i]")
+        keyword_selectors.append(f"input[aria-label*=\"{kw_safe}\" i]")
+        keyword_selectors.append(f"input[name*=\"{kw_safe}\" i]")
+
+    locators.append(page.locator(",".join(keyword_selectors)))
+
+    type_selectors = ["input[type='search']"]
+    if include_text_inputs:
+        type_selectors.append("input[type='text']")
+    locators.append(page.locator(",".join(type_selectors)))
+
+    locators.append(page.locator(",".join(
+        [
+            f"input[placeholder*=\"{safe}\" i]",
+            f"input[aria-label*=\"{safe}\" i]",
+            f"input[name*=\"{safe}\" i]",
+        ]
+    )))
+
+    return locators
 
 
 def format_tool_observation(result: ToolResult) -> str:
