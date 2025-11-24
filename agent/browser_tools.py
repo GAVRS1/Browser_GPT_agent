@@ -50,8 +50,14 @@ class BrowserToolbox:
       необходимости может ещё раз запросить скрин/другой участок.
     """
 
-    def __init__(self, page: Optional[Page] = None) -> None:
+    def __init__(
+        self,
+        page: Optional[Page] = None,
+        screenshots_dir: Optional[Path] = None,
+    ) -> None:
         self.page: Page = page or get_page()
+        self.screenshots_dir = screenshots_dir or SCREENSHOTS_DIR
+        self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------
     # OpenAI tool schemas
@@ -252,19 +258,23 @@ class BrowserToolbox:
         """
         page = self.page
 
-        # Папка для скриншотов внутри проекта
-        screenshots_dir = Path("screenshots")
-        screenshots_dir.mkdir(parents=True, exist_ok=True)
-
         # Имя файла по времени
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        path = screenshots_dir / f"screenshot_{timestamp}.png"
+        path = self.screenshots_dir / f"screenshot_{timestamp}.png"
 
         try:
             page.screenshot(path=str(path), full_page=full_page)
             logger.info(f"[tools] Screenshot saved to {path}")
-            # LLM важен сам путь, текст можно минимальный
-            return str(path)
+            title = safe_title(page)
+            url = ""
+            with contextlib.suppress(Exception):
+                url = page.url or ""
+            description = (
+                f"Screenshot saved to {path}. "
+                f"Context: url={url or 'unknown'}, title={title or '—'}. "
+                "Повтори ссылку на этот файл в следующих шагах, если нужен тот же снимок."
+            )
+            return description
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[tools] Screenshot failed: {exc}")
             # Пробрасываем наверх, чтобы execute() пометил инструмент как fail
@@ -538,7 +548,7 @@ class BrowserToolbox:
 
     def _capture_screenshot_bytes(self) -> tuple[str, bytes]:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        path = SCREENSHOTS_DIR / f"vision_fallback_{timestamp}.png"
+        path = self.screenshots_dir / f"vision_fallback_{timestamp}.png"
         path.parent.mkdir(parents=True, exist_ok=True)
         image_bytes = self.page.screenshot(path=str(path), full_page=False)
         return str(path), image_bytes
