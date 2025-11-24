@@ -507,6 +507,30 @@ class BrowserToolbox:
         if not query:
             return "Нет запроса для ввода"
 
+        page = self.page
+
+        if _looks_like_search_intent(query):
+            direct_locator = _first_visible(
+                _search_locators(page, query, include_text_inputs=True)
+            )
+            if direct_locator:
+                direct_locator.fill(text, timeout=2000)
+                if press_enter:
+                    direct_locator.press("Enter")
+                return (
+                    "Нашёл поле поиска по общим атрибутам (placeholder/aria-label/name) "
+                    f"и ввёл запрос '{query}'."
+                )
+
+            vision_hint = self._vision_locate_input(query)
+            if vision_hint:
+                applied = self._apply_vision_hint(vision_hint, text, press_enter)
+                if applied:
+                    return (
+                        f"Ввёл текст через vision-fallback для запроса '{query}'. "
+                        f"Основание: {vision_hint.reason or 'подсказка модели'}"
+                    )
+
         candidate = self._find_text_locator(query)
         if candidate:
             candidate.fill(text, timeout=2000)
@@ -847,6 +871,7 @@ class BrowserToolbox:
         failure_reasons: list[str] = []
         for cand in candidates:
             before_state = _snapshot_page_state(page)
+            before_cart_filled = _cart_has_items(page)
 
             try:
                 cand["locator"].scroll_into_view_if_needed()
@@ -872,8 +897,14 @@ class BrowserToolbox:
 
             time.sleep(1)
             after_state = _snapshot_page_state(page)
-            if _state_changed(before_state, after_state):
-                return "Кликнул по карточке товара."
+            cart_has_items = _cart_has_items(page)
+            if _state_changed(before_state, after_state) and (
+                cart_has_items or before_cart_filled != cart_has_items
+            ):
+                if cart_has_items:
+                    return "Кликнул по карточке товара и корзина не пустая."
+                failure_reasons.append("после клика корзина выглядит пустой")
+                continue
 
             failure_reasons.append("клик не изменил состояние")
             # Пытаемся следующую карточку
@@ -1073,6 +1104,49 @@ def _state_changed(before: dict, after: dict) -> bool:
     if abs(after.get("dom_len", 0) - before.get("dom_len", 0)) > 50:
         return True
     return False
+
+
+def _collect_cart_texts(page: Page) -> list[str]:
+    texts: list[str] = []
+
+    selectors = [
+        page.get_by_role("link", name=re.compile("корз|basket|cart", re.IGNORECASE)),
+        page.get_by_role("button", name=re.compile("корз|basket|cart", re.IGNORECASE)),
+        page.locator(
+            ",".join(
+                [
+                    "[aria-label*='корз' i]",
+                    "[aria-label*='cart' i]",
+                    "[href*='cart']",
+                    "[href*='basket']",
+                    "[data-testid*='cart' i]",
+                    "[data-testid*='basket' i]",
+                ]
+            )
+        ),
+    ]
+
+    for locator in selectors:
+        with contextlib.suppress(Exception):
+            count = locator.count()
+            for idx in range(min(count, 3)):
+                text = _safe_text(locator.nth(idx))
+                if text:
+                    texts.append(text)
+    return texts
+
+
+def _cart_has_items(page: Page) -> bool:
+    texts = _collect_cart_texts(page)
+    combined = " ".join(texts)
+    if not combined:
+        return False
+
+    if re.search(r"пуст", combined, re.IGNORECASE):
+        return False
+
+    numbers = [int(n) for n in re.findall(r"(\d+)", combined) if n.isdigit()]
+    return any(n > 0 for n in numbers)
 
 
 def _extract_json_block(text: str) -> Optional[str]:
