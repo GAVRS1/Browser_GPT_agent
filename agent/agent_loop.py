@@ -677,7 +677,11 @@ def run_agent(goal: str) -> None:
             if not approved:
                 record.status = "cancelled"
                 record.error = "confirmation_denied"
-                _set_status(last_error="confirmation_denied")
+                record.details = (
+                    "Запрошено подтверждение для рискованной цели (удаление/оплата/заявки), "
+                    "но пользователь не подтвердил выполнение."
+                )
+                _set_status(last_error="confirmation_denied", last_report=record.details)
                 return
 
         plan_text = _run_llm_planning(goal)
