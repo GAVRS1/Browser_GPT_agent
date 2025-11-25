@@ -86,9 +86,6 @@ class BrowserToolbox:
         # Если текущая страница недоступна — берём новую из контекста
         try:
             self.page = get_page()
-            with contextlib.suppress(Exception):
-                self.page.set_default_timeout(5000)
-                self.page.set_default_navigation_timeout(8000)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[tools] Failed to refresh page after close: {exc}")
 

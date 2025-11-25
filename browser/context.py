@@ -125,7 +125,8 @@ def get_context() -> BrowserContext:
     # Нужен живой Playwright
     if _playwright is None:
         logger.info("Starting Playwright and launching persistent Chromium context...")
-        _playwright = _start_playwright()
+        apply_requests_proxy()
+        _playwright = sync_playwright().start()
 
     use_proxy = should_use_browser_proxy()
 
