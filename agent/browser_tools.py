@@ -60,6 +60,28 @@ class BrowserToolbox:
         self.screenshots_dir = screenshots_dir or SCREENSHOTS_DIR
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
+    def _ensure_page_alive(self) -> None:
+        """Переинициализирует вкладку, если текущая была закрыта.
+
+        При длительных сессиях Playwright-страница иногда оказывается закрытой
+        (например, после ошибок навигации). В таком случае любой клик зависает
+        до таймаута и срабатывает ошибка «Target page/context has been closed».
+        Чтобы избежать подвисаний, перед действиями убеждаемся, что страница
+        жива, и при необходимости создаём новую через get_page().
+        """
+
+        try:
+            if self.page and not self.page.is_closed():
+                return
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Если текущая страница недоступна — берём новую из контекста
+        try:
+            self.page = get_page()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[tools] Failed to refresh page after close: {exc}")
+
     # ------------------------------------------------------------
     # OpenAI tool schemas
     # ------------------------------------------------------------
@@ -477,6 +499,9 @@ class BrowserToolbox:
         if not query:
             return "Пустой запрос — клик не выполнен"
 
+        # Обновляем страницу, если предыдущая вкладка умерла
+        self._ensure_page_alive()
+
         page = self.page
         strategies: List[Locator] = []
 
@@ -518,6 +543,11 @@ class BrowserToolbox:
                 result_message = f"Клик по {query} не завершился по таймауту: {exc}"
             except Exception as exc:
                 result_message = f"Ошибка при клике по {query}: {exc}"
+
+                # Если страница или контекст закрылись, попробуем восстановиться
+                if "has been closed" in str(exc).lower():
+                    self._ensure_page_alive()
+                    result_message += " (вкладка была переподключена, попробуй ещё раз)"
         else:
             result_message = f"Не нашёл, куда кликнуть по запросу: {query}"
 

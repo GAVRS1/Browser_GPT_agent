@@ -1,4 +1,5 @@
 import time
+import contextlib
 from pathlib import Path
 from typing import Optional
 
@@ -61,6 +62,41 @@ def _launch_context(playwright: Playwright, use_proxy: bool) -> BrowserContext:
     return context
 
 
+def _stop_playwright() -> None:
+    """Останавливает Playwright, игнорируя ошибки."""
+
+    global _playwright
+    if _playwright is None:
+        return
+
+    with contextlib.suppress(Exception):
+        _playwright.stop()
+    _playwright = None
+
+
+def _start_playwright() -> Playwright:
+    """Запускает Playwright и настраивает прокси для HTTP-запросов."""
+
+    apply_requests_proxy()
+    return sync_playwright().start()
+
+
+def _launch_with_proxy_choice(playwright: Playwright, use_proxy: bool) -> BrowserContext:
+    """Запускает контекст, при ошибке с прокси делает fallback без прокси."""
+
+    try:
+        return _launch_context(playwright, use_proxy=use_proxy)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            f"[browser] Failed to launch Chromium "
+            f"{'WITH' if use_proxy else 'WITHOUT'} proxy: {exc}"
+        )
+        if use_proxy:
+            logger.info("[browser] Retrying launch WITHOUT proxy...")
+            return _launch_context(playwright, use_proxy=False)
+        raise
+
+
 # ============================================================
 # PUBLIC: получить persistent context
 # ============================================================
@@ -69,42 +105,44 @@ def _launch_context(playwright: Playwright, use_proxy: bool) -> BrowserContext:
 def get_context() -> BrowserContext:
     """
     Возвращает persistent BrowserContext.
-    Запускается только один раз за весь runtime.
 
-    Здесь больше нет undetected-chromedriver и CDP-подключения.
-    Вся работа идёт через обычный Playwright Chromium
-    с сохранением профиля в user_data.
+    Контекст может внезапно закрыться (например, из-за ошибки Chromium).
+    В таком случае создаём новый: переиспользуем уже запущенный Playwright
+    или запускаем его заново, если он тоже остановлен.
     """
 
     global _playwright, _context
 
-    if _playwright is not None and _context is not None:
-        return _context
+    # Если контекст живой — просто возвращаем его
+    if _context is not None:
+        with contextlib.suppress(Exception):
+            if not _context.is_closed():
+                return _context
 
-    logger.info("Starting Playwright and launching persistent Chromium context...")
+        logger.warning("[browser] Existing context is closed. Relaunching Chromium context...")
+        _context = None
 
-    # Проксирование HTTP-запросов для LLM / API
-    apply_requests_proxy()
-
-    # Запускаем Playwright
-    _playwright = sync_playwright().start()
+    # Нужен живой Playwright
+    if _playwright is None:
+        logger.info("Starting Playwright and launching persistent Chromium context...")
+        _playwright = _start_playwright()
 
     use_proxy = should_use_browser_proxy()
 
     # Пытаемся запустить браузер с учётом настроек BROWSER_PROXY.
     # Если включено, но что-то пошло не так — делаем graceful fallback без прокси.
     try:
-        _context = _launch_context(_playwright, use_proxy=use_proxy)
+        _context = _launch_with_proxy_choice(_playwright, use_proxy=use_proxy)
     except Exception as exc:  # noqa: BLE001
-        logger.error(
-            f"[browser] Failed to launch Chromium "
-            f"{'WITH' if use_proxy else 'WITHOUT'} proxy: {exc}"
+        # Иногда Playwright оказывается в невалидном состоянии (например, Chromium аварийно
+        # завершился). В этом случае пробуем полностью перезапустить Playwright и сделать
+        # ещё одну попытку создания контекста.
+        logger.warning(
+            "[browser] Launch failed, restarting Playwright and retrying once..."
         )
-        if use_proxy:
-            logger.info("[browser] Retrying launch WITHOUT proxy...")
-            _context = _launch_context(_playwright, use_proxy=False)
-        else:
-            raise
+        _stop_playwright()
+        _playwright = _start_playwright()
+        _context = _launch_with_proxy_choice(_playwright, use_proxy=use_proxy)
 
     return _context
 
@@ -123,8 +161,12 @@ def get_page() -> Page:
     context = get_context()
 
     if context.pages:
-        page = context.pages[0]
-        logger.debug("Reusing existing page.")
+        page = next((p for p in context.pages if not p.is_closed()), None)
+        if page:
+            logger.debug("Reusing existing page.")
+        else:
+            logger.debug("All existing pages are closed, creating a new one...")
+            page = context.new_page()
     else:
         logger.debug("No pages found, creating a new one...")
         page = context.new_page()
