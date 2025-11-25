@@ -1,4 +1,5 @@
 import time
+import contextlib
 from pathlib import Path
 from typing import Optional
 
@@ -69,25 +70,28 @@ def _launch_context(playwright: Playwright, use_proxy: bool) -> BrowserContext:
 def get_context() -> BrowserContext:
     """
     Возвращает persistent BrowserContext.
-    Запускается только один раз за весь runtime.
 
-    Здесь больше нет undetected-chromedriver и CDP-подключения.
-    Вся работа идёт через обычный Playwright Chromium
-    с сохранением профиля в user_data.
+    Контекст может внезапно закрыться (например, из-за ошибки Chromium).
+    В таком случае создаём новый: переиспользуем уже запущенный Playwright
+    или запускаем его заново, если он тоже остановлен.
     """
 
     global _playwright, _context
 
-    if _playwright is not None and _context is not None:
-        return _context
+    # Если контекст живой — просто возвращаем его
+    if _context is not None:
+        with contextlib.suppress(Exception):
+            if not _context.is_closed():
+                return _context
 
-    logger.info("Starting Playwright and launching persistent Chromium context...")
+        logger.warning("[browser] Existing context is closed. Relaunching Chromium context...")
+        _context = None
 
-    # Проксирование HTTP-запросов для LLM / API
-    apply_requests_proxy()
-
-    # Запускаем Playwright
-    _playwright = sync_playwright().start()
+    # Нужен живой Playwright
+    if _playwright is None:
+        logger.info("Starting Playwright and launching persistent Chromium context...")
+        apply_requests_proxy()
+        _playwright = sync_playwright().start()
 
     use_proxy = should_use_browser_proxy()
 
@@ -123,8 +127,12 @@ def get_page() -> Page:
     context = get_context()
 
     if context.pages:
-        page = context.pages[0]
-        logger.debug("Reusing existing page.")
+        page = next((p for p in context.pages if not p.is_closed()), None)
+        if page:
+            logger.debug("Reusing existing page.")
+        else:
+            logger.debug("All existing pages are closed, creating a new one...")
+            page = context.new_page()
     else:
         logger.debug("No pages found, creating a new one...")
         page = context.new_page()
