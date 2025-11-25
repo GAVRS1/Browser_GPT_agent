@@ -57,15 +57,25 @@ class BrowserToolbox:
         screenshots_dir: Optional[Path] = None,
     ) -> None:
         self.page: Page = page or get_page()
+        self._apply_default_timeouts(self.page)
+        self.screenshots_dir = screenshots_dir or SCREENSHOTS_DIR
+        self.screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+    def _apply_default_timeouts(self, page: Page) -> None:
+        """Проставляет короткие таймауты для действий Playwright.
+
+        Используется при инициализации и при переподключении к новой вкладке,
+        чтобы действия типа click/read_view не зависали на десятки секунд,
+        если предыдущий контекст браузера был закрыт и пришлось открыть новый.
+        """
+
         # Ставим небольшие таймауты по умолчанию, чтобы любые залипания
         # (например, при клике или ожидании появления элемента) завершались
         # быстро и не морозили консоль. Навигационные таймауты тоже ограничены
         # несколькими секундами, поскольку агент всегда может повторить шаг.
         with contextlib.suppress(Exception):
-            self.page.set_default_timeout(5000)
-            self.page.set_default_navigation_timeout(8000)
-        self.screenshots_dir = screenshots_dir or SCREENSHOTS_DIR
-        self.screenshots_dir.mkdir(parents=True, exist_ok=True)
+            page.set_default_timeout(100)
+            page.set_default_navigation_timeout(800)
 
     def _ensure_page_alive(self) -> None:
         """Переинициализирует вкладку, если текущая была закрыта.
@@ -85,7 +95,9 @@ class BrowserToolbox:
 
         # Если текущая страница недоступна — берём новую из контекста
         try:
-            self.page = get_page()
+            new_page = get_page()
+            self.page = new_page
+            self._apply_default_timeouts(new_page)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[tools] Failed to refresh page after close: {exc}")
 
@@ -286,6 +298,7 @@ class BrowserToolbox:
 
         Возвращает ПУТЬ до файла со скриншотом (его увидит и LLM, и ты в логах).
         """
+        self._ensure_page_alive()
         page = self.page
 
         # Имя файла по времени
@@ -323,6 +336,7 @@ class BrowserToolbox:
           примерное название, цену, вес (в граммах), описание и состав (если видны).
         """
 
+        self._ensure_page_alive()
         page = self.page
         summary: Dict[str, Any] = {"url": page.url, "title": safe_title(page)}
 
@@ -499,6 +513,7 @@ class BrowserToolbox:
     def open_url(self, url: str) -> str:
         if not url:
             return "URL не задан"
+        self._ensure_page_alive()
         self.page.goto(url, wait_until="domcontentloaded")
         return f"Открыл {self.page.url}"
 
@@ -573,6 +588,7 @@ class BrowserToolbox:
         if not query:
             return "Нет запроса для ввода"
 
+        self._ensure_page_alive()
         page = self.page
 
         if _looks_like_search_intent(query):
@@ -824,6 +840,7 @@ class BrowserToolbox:
           а не уезжать всё ниже.
         """
 
+        self._ensure_page_alive()
         page = self.page
 
         # Пытаемся понять, что мы на Лавке и уже видим сетку карточек
@@ -876,6 +893,7 @@ class BrowserToolbox:
         return f"Прокрутил {direction} на {amount}"
 
     def go_back(self) -> str:
+        self._ensure_page_alive()
         with contextlib.suppress(Exception):
             self.page.go_back()
         return "Вернулся на предыдущую страницу"
@@ -891,6 +909,7 @@ class BrowserToolbox:
           вида «15 мин», «30 мин» — они понижаются в приоритете.
         """
 
+        self._ensure_page_alive()
         page = self.page
 
         search_tokens = _collect_search_tokens(page)
