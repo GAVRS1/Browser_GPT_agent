@@ -74,8 +74,8 @@ class BrowserToolbox:
         # быстро и не морозили консоль. Навигационные таймауты тоже ограничены
         # несколькими секундами, поскольку агент всегда может повторить шаг.
         with contextlib.suppress(Exception):
-            page.set_default_timeout(100)
-            page.set_default_navigation_timeout(800)
+            page.set_default_timeout(300)
+            page.set_default_navigation_timeout(300)
 
     def _ensure_page_alive(self) -> None:
         """Переинициализирует вкладку, если текущая была закрыта.
