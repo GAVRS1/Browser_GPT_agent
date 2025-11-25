@@ -1487,26 +1487,41 @@ def _search_locators(page: Page, query: str, include_text_inputs: bool = False) 
     safe = _css_escape(query)
     locators: List[Locator] = [page.get_by_role("searchbox")]
 
+    # Текстовые поля — исключаем checkbox/radio/button, которые нельзя fill()
+    text_input_selector = (
+        "input:not([type='checkbox']):not([type='radio']):"
+        "not([type='button']):not([type='submit']):not([type='reset']):"
+        "not([type='file']):not([type='range']):not([type='color'])"
+    )
+
     search_keywords = ["поиск", "search", "найти"]
     keyword_selectors = []
     for kw in search_keywords:
         kw_safe = _css_escape(kw)
-        keyword_selectors.append(f"input[placeholder*=\"{kw_safe}\" i]")
-        keyword_selectors.append(f"input[aria-label*=\"{kw_safe}\" i]")
-        keyword_selectors.append(f"input[name*=\"{kw_safe}\" i]")
+        keyword_selectors.append(f"{text_input_selector}[placeholder*=\"{kw_safe}\" i]")
+        keyword_selectors.append(f"{text_input_selector}[aria-label*=\"{kw_safe}\" i]")
+        keyword_selectors.append(f"{text_input_selector}[name*=\"{kw_safe}\" i]")
 
     locators.append(page.locator(",".join(keyword_selectors)))
 
     type_selectors = ["input[type='search']"]
     if include_text_inputs:
-        type_selectors.append("input[type='text']")
+        type_selectors.extend(
+            [
+                "input[type='text']",
+                "input[type='email']",
+                "input[type='url']",
+                "input[type='tel']",
+                "input[type='number']",
+            ]
+        )
     locators.append(page.locator(",".join(type_selectors)))
 
     locators.append(page.locator(",".join(
         [
-            f"input[placeholder*=\"{safe}\" i]",
-            f"input[aria-label*=\"{safe}\" i]",
-            f"input[name*=\"{safe}\" i]",
+            f"{text_input_selector}[placeholder*=\"{safe}\" i]",
+            f"{text_input_selector}[aria-label*=\"{safe}\" i]",
+            f"{text_input_selector}[name*=\"{safe}\" i]",
         ]
     )))
 
