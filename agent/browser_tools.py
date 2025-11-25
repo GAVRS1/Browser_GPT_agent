@@ -57,6 +57,13 @@ class BrowserToolbox:
         screenshots_dir: Optional[Path] = None,
     ) -> None:
         self.page: Page = page or get_page()
+        # Ставим небольшие таймауты по умолчанию, чтобы любые залипания
+        # (например, при клике или ожидании появления элемента) завершались
+        # быстро и не морозили консоль. Навигационные таймауты тоже ограничены
+        # несколькими секундами, поскольку агент всегда может повторить шаг.
+        with contextlib.suppress(Exception):
+            self.page.set_default_timeout(5000)
+            self.page.set_default_navigation_timeout(8000)
         self.screenshots_dir = screenshots_dir or SCREENSHOTS_DIR
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -79,6 +86,9 @@ class BrowserToolbox:
         # Если текущая страница недоступна — берём новую из контекста
         try:
             self.page = get_page()
+            with contextlib.suppress(Exception):
+                self.page.set_default_timeout(5000)
+                self.page.set_default_navigation_timeout(8000)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[tools] Failed to refresh page after close: {exc}")
 
