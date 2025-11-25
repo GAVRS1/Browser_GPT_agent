@@ -5,6 +5,7 @@ import json
 import base64
 import re
 import textwrap
+import os
 from urllib.parse import parse_qs, unquote, urlparse
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,20 +63,31 @@ class BrowserToolbox:
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
     def _apply_default_timeouts(self, page: Page) -> None:
-        """Проставляет короткие таймауты для действий Playwright.
+        """Настраивает дефолтные таймауты Playwright с учётом навигации.
 
-        Используется при инициализации и при переподключении к новой вкладке,
-        чтобы действия типа click/read_view не зависали на десятки секунд,
-        если предыдущий контекст браузера был закрыт и пришлось открыть новый.
+        Таймауты для действий оставляем короткими (по умолчанию ~3 секунды),
+        чтобы клики/поиски элементов быстро отваливались без заморозки консоли.
+        При этом таймаут навигации увеличен до 12 секунд по умолчанию, чтобы
+        типовая загрузка страницы успевала завершиться. Оба значения можно
+        переопределить через переменные окружения BROWSER_DEFAULT_TIMEOUT_MS и
+        BROWSER_NAVIGATION_TIMEOUT_MS.
         """
+        def _timeout_from_env(env_var: str, default: int) -> int:
+            try:
+                return int(os.getenv(env_var, default))
+            except ValueError:
+                return default
 
-        # Ставим небольшие таймауты по умолчанию, чтобы любые залипания
-        # (например, при клике или ожидании появления элемента) завершались
-        # быстро и не морозили консоль. Навигационные таймауты тоже ограничены
-        # несколькими секундами, поскольку агент всегда может повторить шаг.
+        default_timeout_ms = _timeout_from_env("BROWSER_DEFAULT_TIMEOUT_MS", 3000)
+        navigation_timeout_ms = _timeout_from_env(
+            "BROWSER_NAVIGATION_TIMEOUT_MS", 12000
+        )
+
+        # Навигацию даём дольше, чтобы страница успела загрузиться; короткие
+        # таймауты для действий помогают не зависать на недоступных элементах.
         with contextlib.suppress(Exception):
-            page.set_default_timeout(300)
-            page.set_default_navigation_timeout(300)
+            page.set_default_timeout(default_timeout_ms)
+            page.set_default_navigation_timeout(navigation_timeout_ms)
 
     def _ensure_page_alive(self) -> None:
         """Переинициализирует вкладку, если текущая была закрыта.
