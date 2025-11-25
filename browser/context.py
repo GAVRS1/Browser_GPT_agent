@@ -62,6 +62,41 @@ def _launch_context(playwright: Playwright, use_proxy: bool) -> BrowserContext:
     return context
 
 
+def _stop_playwright() -> None:
+    """Останавливает Playwright, игнорируя ошибки."""
+
+    global _playwright
+    if _playwright is None:
+        return
+
+    with contextlib.suppress(Exception):
+        _playwright.stop()
+    _playwright = None
+
+
+def _start_playwright() -> Playwright:
+    """Запускает Playwright и настраивает прокси для HTTP-запросов."""
+
+    apply_requests_proxy()
+    return sync_playwright().start()
+
+
+def _launch_with_proxy_choice(playwright: Playwright, use_proxy: bool) -> BrowserContext:
+    """Запускает контекст, при ошибке с прокси делает fallback без прокси."""
+
+    try:
+        return _launch_context(playwright, use_proxy=use_proxy)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            f"[browser] Failed to launch Chromium "
+            f"{'WITH' if use_proxy else 'WITHOUT'} proxy: {exc}"
+        )
+        if use_proxy:
+            logger.info("[browser] Retrying launch WITHOUT proxy...")
+            return _launch_context(playwright, use_proxy=False)
+        raise
+
+
 # ============================================================
 # PUBLIC: получить persistent context
 # ============================================================
@@ -98,17 +133,17 @@ def get_context() -> BrowserContext:
     # Пытаемся запустить браузер с учётом настроек BROWSER_PROXY.
     # Если включено, но что-то пошло не так — делаем graceful fallback без прокси.
     try:
-        _context = _launch_context(_playwright, use_proxy=use_proxy)
+        _context = _launch_with_proxy_choice(_playwright, use_proxy=use_proxy)
     except Exception as exc:  # noqa: BLE001
-        logger.error(
-            f"[browser] Failed to launch Chromium "
-            f"{'WITH' if use_proxy else 'WITHOUT'} proxy: {exc}"
+        # Иногда Playwright оказывается в невалидном состоянии (например, Chromium аварийно
+        # завершился). В этом случае пробуем полностью перезапустить Playwright и сделать
+        # ещё одну попытку создания контекста.
+        logger.warning(
+            "[browser] Launch failed, restarting Playwright and retrying once..."
         )
-        if use_proxy:
-            logger.info("[browser] Retrying launch WITHOUT proxy...")
-            _context = _launch_context(_playwright, use_proxy=False)
-        else:
-            raise
+        _stop_playwright()
+        _playwright = _start_playwright()
+        _context = _launch_with_proxy_choice(_playwright, use_proxy=use_proxy)
 
     return _context
 
