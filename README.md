@@ -35,6 +35,9 @@ Browser GPT Agent — автономный AI-агент на Python, работ
 OPENAI_API_KEY= #указываете ключ агента
 PROXY= #указываете прокси для работы  с агентом
 BROWSER_PROXY= #и указываете применения прокси если false то прокси будет применяться только у агента (для ру сайтов нужно false)
+#настройка задержек между кликами и переходами
+BROWSER_DEFAULT_TIMEOUT_MS=300
+BROWSER_NAVIGATION_TIMEOUT_MS=500 
 ```
 ## ▶️ Запуск (Windows)
 1. install.bat — установка зависимостей
@@ -45,22 +48,27 @@ BROWSER_PROXY= #и указываете применения прокси есл
 ```plaintext
 /agent
     agent_loop.py
-    planner.py
-    tool_registry.py
+    browser_tools.py
+    debug_thoughts.py
+    llm_client.py
+    tools_init.py
     subagents/
-        yandex_mail.py
-        yandex_lavka.py
-        hh_ru.py
+        utils.py
+        hhru/
+            hhru.py
+        yandex_mail/
+            common.py
+            compose.py
+            read_delete.py
+            reply.py
+        yandex_lavka/
+            __init__.py
 /browser
     context.py
-    tools.py
 /config
     proxy.py
-    settings.py
-/user_data
-    ...
 main.py
-.env.example
+.env
 install.bat
 start.bat
 Chrome.bat
