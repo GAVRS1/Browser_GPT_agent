@@ -76,9 +76,9 @@ Chrome.bat
 
 ## ✔️ Соответствие ТЗ
 Проект полностью выполняет требования:
-- Реальный браузер
+- Ручное управление браузером
 - Автономное LLM-планирование
-- Sub-agent architecture
+- Sub-agents
 - Persistent session
 - Обработка ошибок
 - Security layer
