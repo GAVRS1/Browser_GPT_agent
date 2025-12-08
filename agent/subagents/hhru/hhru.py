@@ -14,6 +14,7 @@ from agent.subagents.utils import matches_domain
 from agent.browser_tools import BrowserToolbox, format_tool_observation
 from agent.llm_client import get_client
 from agent.tools_init import dom_snapshot
+from config.sites import HHRU_HOME_URL
 
 
 # ----------------------------------------------------------------------------
@@ -112,7 +113,7 @@ class HhRuSubAgent:
     def _open_hh_home(self, page: Page) -> None:
         logger.info("[hhru] Navigating to hh.ru…")
         try:
-            page.goto("https://hh.ru/", wait_until="domcontentloaded")
+            page.goto(HHRU_HOME_URL, wait_until="domcontentloaded")
             logger.info("[hhru] hh.ru appears to be open.")
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[hhru] Failed to open hh.ru: {exc}")

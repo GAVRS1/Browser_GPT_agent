@@ -8,6 +8,15 @@ from typing import List, Optional, Sequence, Tuple
 
 from loguru import logger
 from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
+from config.sites import (
+    YANDEX_MAIL_AFTER_CLICK_WAIT_MS,
+    YANDEX_MAIL_CLICK_TIMEOUT_MS,
+    YANDEX_MAIL_HOME_URL,
+    YANDEX_MAIL_INNER_TEXT_TIMEOUT_MS,
+    YANDEX_MAIL_LIST_VISIBILITY_TIMEOUT_MS,
+    YANDEX_MAIL_LOGIN_TIMEOUT_MS,
+    YANDEX_MAIL_PREVIEW_COLLECTION_WAIT_MS,
+)
 
 
 # -------------------------
@@ -56,19 +65,19 @@ def open_mailbox(page: Page) -> Optional[str]:
     Если нет — возвращаем None.
     """
     logger.info("[yandex_mail] Navigating to Yandex Mail…")
-    page.goto("https://mail.yandex.ru/", wait_until="domcontentloaded")
+    page.goto(YANDEX_MAIL_HOME_URL, wait_until="domcontentloaded")
 
     login_required = False
 
     # Простейшие эвристики по полям логина/пароля
     with contextlib.suppress(PlaywrightTimeoutError, Exception):
         login_field = page.locator("input[type='email'], input[name='login']").first
-        if login_field.is_visible(timeout=2000):
+        if login_field.is_visible(timeout=YANDEX_MAIL_LOGIN_TIMEOUT_MS):
             login_required = True
 
     with contextlib.suppress(PlaywrightTimeoutError, Exception):
         pass_field = page.locator("input[type='password']").first
-        if pass_field.is_visible(timeout=2000):
+        if pass_field.is_visible(timeout=YANDEX_MAIL_LOGIN_TIMEOUT_MS):
             login_required = True
 
     if login_required:
@@ -93,17 +102,17 @@ def ensure_mail_list(page: Page) -> None:
             "link",
             name=re.compile("входящие", re.IGNORECASE),
         ).first
-        if inbox_link.is_visible(timeout=1200):
-            inbox_link.click(timeout=2000)
-            page.wait_for_timeout(800)
+        if inbox_link.is_visible(timeout=YANDEX_MAIL_LIST_VISIBILITY_TIMEOUT_MS):
+            inbox_link.click(timeout=YANDEX_MAIL_CLICK_TIMEOUT_MS)
+            page.wait_for_timeout(YANDEX_MAIL_AFTER_CLICK_WAIT_MS)
             return
 
     # Фолбэк — по тексту
     with contextlib.suppress(Exception):
         inbox_text = page.get_by_text(re.compile("Входящие", re.IGNORECASE)).first
-        if inbox_text.is_visible(timeout=1200):
-            inbox_text.click(timeout=2000)
-            page.wait_for_timeout(800)
+        if inbox_text.is_visible(timeout=YANDEX_MAIL_LIST_VISIBILITY_TIMEOUT_MS):
+            inbox_text.click(timeout=YANDEX_MAIL_CLICK_TIMEOUT_MS)
+            page.wait_for_timeout(YANDEX_MAIL_AFTER_CLICK_WAIT_MS)
 
 
 # -------------------------
@@ -111,7 +120,7 @@ def ensure_mail_list(page: Page) -> None:
 # -------------------------
 def _safe_inner_text(locator: Locator) -> str:
     with contextlib.suppress(Exception):
-        txt = locator.inner_text(timeout=1500).strip()
+        txt = locator.inner_text(timeout=YANDEX_MAIL_INNER_TEXT_TIMEOUT_MS).strip()
         return txt
     return ""
 
@@ -131,7 +140,7 @@ def collect_previews(page: Page, limit: int) -> List[MessageDraft]:
     Находит элементы, похожие на письма, и строит из них превью.
     """
     with contextlib.suppress(Exception):
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(YANDEX_MAIL_PREVIEW_COLLECTION_WAIT_MS)
 
     base = page.locator(_MESSAGE_SELECTOR)
     count = 0
@@ -196,8 +205,8 @@ def extract_body(page: Page) -> str:
     for selector in candidates:
         locator = page.locator(selector).first
         with contextlib.suppress(PlaywrightTimeoutError, Exception):
-            if locator.is_visible(timeout=1500):
-                text = locator.inner_text(timeout=1500).strip()
+            if locator.is_visible(timeout=YANDEX_MAIL_INNER_TEXT_TIMEOUT_MS):
+                text = locator.inner_text(timeout=YANDEX_MAIL_INNER_TEXT_TIMEOUT_MS).strip()
                 if text:
                     logger.debug(f"[yandex_mail] Extracted body via {selector}")
                     return text
