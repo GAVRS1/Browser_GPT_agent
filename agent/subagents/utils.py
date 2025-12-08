@@ -7,8 +7,7 @@ from typing import Iterable
 def matches_domain(goal: str, domains: Iterable[str]) -> bool:
     """Heuristic domain matcher for goals with URLs or host mentions.
     Tries to determine whether the goal text references one of the specified
-    domains without relying on exact paths. Works both for plain mentions like
-    "mail.yandex.ru" and for full URLs with long paths.
+    domains without relying on exact paths.
     """
 
     lowered = goal.lower()

@@ -8,7 +8,7 @@ DEBUG_THOUGHTS = os.getenv("AGENT_DEBUG_THOUGHTS", "1") != "0"
 def log_thought(prefix: str, text: str) -> None:
     """
     Единая функция для вывода мыслей ИИ в лог и в консоль.
-    prefix — короткое имя: 'agent', 'yandex_mail', 'hh', и т.п.
+    prefix — короткое имя: 'agent' или любое название под-агента.
     """
     if not text:
         return
