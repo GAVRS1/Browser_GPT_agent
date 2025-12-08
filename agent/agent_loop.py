@@ -14,6 +14,7 @@ from agent.llm_client import get_client
 from agent.subagents import pick_subagent
 from browser.context import get_page, shutdown_browser
 from agent.debug_thoughts import DEBUG_THOUGHTS, log_thought
+from config.sites import AGENT_CONFIRMATION_TIMEOUT, GOOGLE_SEARCH_URL_TEMPLATE
 
 
 @dataclass
@@ -144,7 +145,7 @@ def _await_console_confirmation(timeout: Optional[float]) -> bool:
         print("Некорректный ввод. Пожалуйста, введите 'y'/'д' или 'n'/'н'.")
 
 
-def _await_confirmation(timeout: float = 60.0) -> bool:
+def _await_confirmation(timeout: float = AGENT_CONFIRMATION_TIMEOUT) -> bool:
     """
     Обёртка над _await_console_confirmation.
     """
@@ -337,7 +338,7 @@ def _safe_navigation(goal: str) -> str:
     except Exception:
         pass
 
-    search_url = f"https://www.google.com/search?q={quote_plus(goal)}"
+    search_url = GOOGLE_SEARCH_URL_TEMPLATE.format(query=quote_plus(goal))
     logger.info(f"[agent] Navigating to {search_url}")
     page.goto(search_url)
     return search_url

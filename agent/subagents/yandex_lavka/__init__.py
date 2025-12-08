@@ -9,6 +9,12 @@ from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from browser.context import get_page
 from agent.subagents.utils import matches_domain
+from config.sites import (
+    YANDEX_LAVKA_HOME_URL,
+    YANDEX_LAVKA_LOGIN_CHECK_TIMEOUT_MS,
+    YANDEX_LAVKA_POST_NAV_WAIT_MS,
+    YANDEX_LAVKA_SEARCH_CLICK_TIMEOUT_MS,
+)
 
 
 class YandexLavkaSubAgent:
@@ -125,18 +131,18 @@ def open_lavka_home(page: Page) -> Optional[str]:
     if "lavka.yandex" not in url:
         logger.info("[yandex_lavka] Navigating to Yandex Lavka…")
         with contextlib.suppress(Exception):
-            page.goto("https://lavka.yandex.ru/", wait_until="domcontentloaded")
+            page.goto(YANDEX_LAVKA_HOME_URL, wait_until="domcontentloaded")
 
     # Дадим интерфейсу чуть времени прогрузиться
     with contextlib.suppress(Exception):
-        page.wait_for_timeout(1200)
+        page.wait_for_timeout(YANDEX_LAVKA_POST_NAV_WAIT_MS)
 
     # Эвристики: если видим явную форму логина — просим пользователя залогиниться.
     login_required = False
 
     with contextlib.suppress(PlaywrightTimeoutError, Exception):
         login_button = page.get_by_text(re.compile("Войти", re.IGNORECASE)).first
-        if login_button.is_visible(timeout=1500):
+        if login_button.is_visible(timeout=YANDEX_LAVKA_LOGIN_CHECK_TIMEOUT_MS):
             login_required = True
 
     if login_required:
@@ -226,8 +232,8 @@ def focus_search_input(page: Page) -> str:
         with contextlib.suppress(Exception):
             el.scroll_into_view_if_needed()
         with contextlib.suppress(Exception):
-            if el.is_visible(timeout=2000):
-                el.click(timeout=2000)
+            if el.is_visible(timeout=YANDEX_LAVKA_SEARCH_CLICK_TIMEOUT_MS):
+                el.click(timeout=YANDEX_LAVKA_SEARCH_CLICK_TIMEOUT_MS)
                 # Очищаем поле, чтобы основной агент мог вводить свои запросы
                 with contextlib.suppress(Exception):
                     el.fill("")
