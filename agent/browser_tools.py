@@ -647,27 +647,30 @@ class BrowserToolbox:
 
         if _looks_like_search_intent(query):
             direct_locator = _first_visible(
-                _search_locators(page, query, include_text_inputs=True)
+                _search_locators(page, query, include_text_inputs=True),
+                allow_hidden_fallback=True,
             )
             if direct_locator:
-                direct_locator.fill(text, timeout=2000)
-                if press_enter:
-                    direct_locator.press("Enter")
-                result_message = (
-                    "Нашёл поле поиска по общим атрибутам (placeholder/aria-label/name) "
-                    f"и ввёл запрос '{query}'."
-                )
-                _log_interaction(
-                    action="type_text",
-                    query=query,
-                    candidates=[{
-                        "summary": _describe_locator(direct_locator),
-                        "visible": True,
-                    }],
-                    chosen_summary=_describe_locator(direct_locator),
-                    result=result_message,
-                )
-                return result_message
+                try:
+                    self._focus_and_fill(direct_locator, text, press_enter)
+                except Exception:
+                    logger.exception("[tools] Failed to fill search field")
+                else:
+                    result_message = (
+                        "Нашёл поле поиска по общим атрибутам (placeholder/aria-label/name) "
+                        f"и ввёл запрос '{query}'."
+                    )
+                    _log_interaction(
+                        action="type_text",
+                        query=query,
+                        candidates=[{
+                            "summary": _describe_locator(direct_locator),
+                            "visible": True,
+                        }],
+                        chosen_summary=_describe_locator(direct_locator),
+                        result=result_message,
+                    )
+                    return result_message
 
             vision_hint = self._vision_locate_input(query)
             if vision_hint:
@@ -689,21 +692,23 @@ class BrowserToolbox:
 
         candidate = self._find_text_locator(query)
         if candidate:
-            candidate.fill(text, timeout=2000)
-            if press_enter:
-                candidate.press("Enter")
-            result_message = f"Ввёл текст в поле {query}"
-            _log_interaction(
-                action="type_text",
-                query=query,
-                candidates=[{
-                    "summary": _describe_locator(candidate),
-                    "visible": True,
-                }],
-                chosen_summary=_describe_locator(candidate),
-                result=result_message,
-            )
-            return result_message
+            try:
+                self._focus_and_fill(candidate, text, press_enter)
+            except Exception:
+                logger.exception("[tools] Failed to fill field")
+            else:
+                result_message = f"Ввёл текст в поле {query}"
+                _log_interaction(
+                    action="type_text",
+                    query=query,
+                    candidates=[{
+                        "summary": _describe_locator(candidate),
+                        "visible": True,
+                    }],
+                    chosen_summary=_describe_locator(candidate),
+                    result=result_message,
+                )
+                return result_message
 
         vision_hint = self._vision_locate_input(query)
         if vision_hint:
@@ -853,13 +858,17 @@ class BrowserToolbox:
         page = self.page
 
         if hint.selector:
-            locator = _first_visible([page.locator(hint.selector)])
+            locator = _first_visible(
+                [page.locator(hint.selector)], allow_hidden_fallback=True
+            )
             if locator:
-                locator.click(timeout=2000)
-                locator.fill(text, timeout=2000)
-                if press_enter:
-                    locator.press("Enter")
-                return True
+                try:
+                    self._focus_and_fill(locator, text, press_enter)
+                    return True
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        f"[vision] Не удалось ввести текст по selector={hint.selector}: {exc}"
+                    )
 
         if hint.click and {"x", "y"}.issubset(hint.click):
             try:
@@ -883,6 +892,16 @@ class BrowserToolbox:
             return steps > 0
 
         return False
+
+    def _focus_and_fill(self, locator: Locator, text: str, press_enter: bool) -> None:
+        with contextlib.suppress(Exception):
+            locator.wait_for(state="attached", timeout=2000)
+            locator.scroll_into_view_if_needed(timeout=2000)
+
+        locator.click(timeout=2000, force=True)
+        locator.fill(text, timeout=3000)
+        if press_enter:
+            locator.press("Enter")
 
     def scroll(self, direction: str = "down", amount: int = 800) -> str:
         """
@@ -1213,17 +1232,32 @@ def _looks_like_search_intent(query: str) -> bool:
     return bool(re.search(r"\b(поиск|search|найти)\b", cleaned))
 
 
-def _first_visible(locators: Iterable[Locator]) -> Optional[Locator]:
+def _first_visible(
+    locators: Iterable[Locator], allow_hidden_fallback: bool = False
+) -> Optional[Locator]:
     seen: set[str] = set()
+    hidden_candidate: Optional[Locator] = None
+
     for locator in locators:
         key = repr(locator)
         if key in seen:
             continue
         seen.add(key)
+
         with contextlib.suppress(Exception):
             candidate = locator.first
             if candidate.is_visible(timeout=1500):
                 return candidate
+
+            if allow_hidden_fallback and hidden_candidate is None:
+                # Если элемент ещё не виден, запоминаем первый доступный локатор,
+                # чтобы попробовать сфокусироваться на нём позже (через скролл/force-click).
+                if candidate.count() > 0:
+                    hidden_candidate = candidate
+
+    if allow_hidden_fallback:
+        return hidden_candidate
+
     return None
 
 
