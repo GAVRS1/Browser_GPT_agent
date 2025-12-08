@@ -90,6 +90,31 @@ class BrowserToolbox:
         self.screenshots_dir = screenshots_dir or SCREENSHOTS_DIR
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _timeout_from_env(env_var: str, default: int, *, floor: Optional[int] = None) -> int:
+        """Возвращает числовой таймаут из env с fallback.
+
+        Если переменная невалидна или меньше заданного минимума —
+        используется дефолт. Такой подход защищает от слишком коротких
+        значений (например, 500 мс), которые ломают навигацию.
+        """
+
+        try:
+            value = int(os.getenv(env_var, default))
+        except ValueError:
+            return default
+
+        if floor is not None:
+            return max(value, floor)
+        return value
+
+    def _navigation_timeout_ms(self) -> int:
+        """Таймаут навигации с безопасным минимумом (5 секунд)."""
+
+        return self._timeout_from_env(
+            "BROWSER_NAVIGATION_TIMEOUT_MS", 12000, floor=5000
+        )
+
     def _apply_default_timeouts(self, page: Page) -> None:
         """Настраивает дефолтные таймауты Playwright с учётом навигации.
 
@@ -100,16 +125,11 @@ class BrowserToolbox:
         переопределить через переменные окружения BROWSER_DEFAULT_TIMEOUT_MS и
         BROWSER_NAVIGATION_TIMEOUT_MS.
         """
-        def _timeout_from_env(env_var: str, default: int) -> int:
-            try:
-                return int(os.getenv(env_var, default))
-            except ValueError:
-                return default
 
-        default_timeout_ms = _timeout_from_env("BROWSER_DEFAULT_TIMEOUT_MS", 3000)
-        navigation_timeout_ms = _timeout_from_env(
-            "BROWSER_NAVIGATION_TIMEOUT_MS", 12000
+        default_timeout_ms = self._timeout_from_env(
+            "BROWSER_DEFAULT_TIMEOUT_MS", 3000, floor=500
         )
+        navigation_timeout_ms = self._navigation_timeout_ms()
 
         # Навигацию даём дольше, чтобы страница успела загрузиться; короткие
         # таймауты для действий помогают не зависать на недоступных элементах.
@@ -568,7 +588,33 @@ class BrowserToolbox:
         if not url:
             return "URL не задан"
         self._ensure_page_alive()
-        self.page.goto(url, wait_until="domcontentloaded")
+        navigation_timeout_ms = self._navigation_timeout_ms()
+        try:
+            self.page.goto(
+                url, wait_until="domcontentloaded", timeout=navigation_timeout_ms
+            )
+        except PlaywrightTimeoutError as exc:
+            logger.warning(
+                "[tools] open_url timed out after {} ms ({}). Retrying with longer timeout...",
+                navigation_timeout_ms,
+                exc,
+            )
+            extended_timeout_ms = max(int(navigation_timeout_ms * 1.5), 15000)
+            try:
+                self.page.goto(
+                    url, wait_until="domcontentloaded", timeout=extended_timeout_ms
+                )
+            except PlaywrightTimeoutError as exc2:
+                logger.error(
+                    "[tools] open_url failed after retry ({} ms): {}",
+                    extended_timeout_ms,
+                    exc2,
+                )
+                return (
+                    f"Не удалось открыть страницу по таймауту {extended_timeout_ms} мс. "
+                    f"Текущий URL: {self.page.url}"
+                )
+
         return f"Открыл {self.page.url}"
 
     def click(self, query: str) -> str:
