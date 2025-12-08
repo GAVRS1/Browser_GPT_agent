@@ -1,56 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import List, Optional
 
 from loguru import logger
 
-from .yandex_mail import YandexMailSubAgent
-from .yandex_lavka import YandexLavkaSubAgent
-from .hhru import HhRuSubAgent
+from .base import BaseSubAgent, SubAgentResult
+from .rental import RentalPaymentSubAgent, RentalReservationSubAgent, RentalSearchSubAgent
 
 
-@dataclass
-class SubAgentResult:
-    """
-    Унифицированный результат работы под-агента.
-
-    success: итоговое булево — получилось ли в целом выполнить задачу.
-    status:  "completed" | "failed" | "needs_input" | другое служебное состояние.
-    details: человекочитаемый отчет о том, что сделал агент.
-    error:   строка с кодом/описанием ошибки (если есть).
-    """
-
-    success: bool
-    status: str
-    details: str
-    error: Optional[str] = None
-
-
-class BaseSubAgent:
-    """
-    Базовый интерфейс под-агентов.
-
-    У каждого под-агента есть:
-    - name: человекочитаемое имя ("Яндекс.Почта", "Интернет-магазин" и т.п.)
-    - matches(goal): возвращает True, если этот под-агент подходит для цели.
-    - run(goal, plan): запускает под-агента с текстом цели и планом LLM.
-    """
-
-    name: str
-
-    def matches(self, goal: str) -> bool:  # pragma: no cover - интерфейс
-        raise NotImplementedError
-
-    def run(self, goal: str, plan: str) -> SubAgentResult:  # pragma: no cover - интерфейс
-        raise NotImplementedError
-
-
-# Здесь регистрируем все специализированные под-агенты.
+# Здесь регистрируем компетенции под аренду.
 _SUBAGENTS: List[BaseSubAgent] = [
-    YandexMailSubAgent(),   # обработка писем, спам и т.д.
-    YandexLavkaSubAgent(),  # подготовка поиска и страницы Лавки
-    HhRuSubAgent(),
+    RentalSearchSubAgent(),
+    RentalReservationSubAgent(),
+    RentalPaymentSubAgent(),
 ]
 
 

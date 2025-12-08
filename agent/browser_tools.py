@@ -184,9 +184,9 @@ class BrowserToolbox:
                     "name": "scroll",
                     "description": (
                         "Прокрутить страницу вверх/вниз на указанный отрезок. "
-                        "На страницах с сеткой товаров (например, Яндекс Лавка) "
-                        "используй скролл осторожно: если уже видна сетка карточек, "
-                        "лучше сначала кликать по карточкам, а не скроллить."
+                        "На страницах с сеткой карточек используй скролл осторожно: "
+                        "если уже видна сетка предложений, лучше сначала кликать по "
+                        "карточкам, а не скроллить."
                     ),
                     "parameters": {
                         "type": "object",
@@ -218,9 +218,9 @@ class BrowserToolbox:
                 "function": {
                     "name": "click_product_card",
                     "description": (
-                        "Клик по одной из крупных карточек товара в основной части страницы. "
-                        "Полезно, когда после поиска в интернет-магазине (например, Яндекс Лавка) "
-                        "появилась сетка блюд/товаров, но к конкретной карточке сложно обратиться по тексту."
+                        "Клик по одной из крупных карточек предложения в основной части страницы. "
+                        "Полезно, когда появилась сетка товаров/слотов, но к конкретной карточке "
+                        "сложно обратиться по тексту."
                     ),
                     "parameters": {
                         "type": "object",
@@ -342,10 +342,8 @@ class BrowserToolbox:
         эвристический локатор, который можно попробовать в клике/вводе.
 
         ДОПОЛНИТЕЛЬНО:
-        - пытаемся выделить крупные карточки товаров (product_cards), чтобы
-          агент понимал, где сетка товаров (например, в Яндекс Лавке).
-        - для Яндекс Лавки стараемся извлекать структуру по каждой карточке:
-          примерное название, цену, вес (в граммах), описание и состав (если видны).
+        - пытаемся выделить крупные карточки товаров/слотов (product_cards), чтобы
+          агент понимал, где сетка предложений.
         """
 
         self._ensure_page_alive()
@@ -847,57 +845,47 @@ class BrowserToolbox:
         Прокрутка страницы.
 
         ДОП. ЛОГИКА:
-        - Если мы на странице Яндекс Лавки и уже видна сетка крупных карточек товаров,
-          скролл отключается и агенту возвращается подсказка: нужно кликать по карточкам,
+        - Если уже видна сетка крупных карточек, лучше переходить к выбору карточек,
           а не уезжать всё ниже.
         """
 
         self._ensure_page_alive()
         page = self.page
 
-        # Пытаемся понять, что мы на Лавке и уже видим сетку карточек
         try:
-            url = page.url or ""
-        except Exception:
-            url = ""
+            root = page.locator("main")
+            if root.count() == 0:
+                root = page.locator("body")
 
-        if "lavka.yandex" in url:
-            try:
-                root = page.locator("main")
-                if root.count() == 0:
-                    root = page.locator("body")
+            containers = root.locator("div, article, section")
+            with contextlib.suppress(Exception):
+                total = containers.count()
+            if total:
+                max_to_check = min(total, 40)
+                big = 0
 
-                containers = root.locator("div, article, section")
-                with contextlib.suppress(Exception):
-                    total = containers.count()
-                if total:
-                    max_to_check = min(total, 40)
-                    big = 0
-
-                    for i in range(max_to_check):
-                        el = containers.nth(i)
-                        with contextlib.suppress(Exception):
-                            box = el.bounding_box()
-                            if not box:
-                                continue
-                            w = box.get("width") or 0
-                            h = box.get("height") or 0
-                            area = w * h
-                            if w >= 120 and h >= 140 and area >= 15000:
-                                big += 1
-                        if big >= 4:
-                            break
-
-                    # Если нашли достаточно крупных блоков — считаем, что это сетка товаров
+                for i in range(max_to_check):
+                    el = containers.nth(i)
+                    with contextlib.suppress(Exception):
+                        box = el.bounding_box()
+                        if not box:
+                            continue
+                        w = box.get("width") or 0
+                        h = box.get("height") or 0
+                        area = w * h
+                        if w >= 120 and h >= 140 and area >= 15000:
+                            big += 1
                     if big >= 4:
-                        return (
-                            "На странице Яндекс Лавки уже видна сетка карточек товаров. "
-                            "Скролл временно отключён: выбери подходящий товар и кликни по его карточке "
-                            "(через click по названию или через инструмент click_product_card)."
-                        )
-            except Exception:
-                # Если эвристика сломалась — просто ведём себя как обычный скролл
-                pass
+                        break
+
+                if big >= 4:
+                    return (
+                        "Видна сетка карточек предложений. "
+                        "Скролл временно отключён: выбери подходящий элемент и кликни по карточке "
+                        "(через click по названию или через инструмент click_product_card)."
+                    )
+        except Exception:
+            pass
 
         delta = amount if direction != "up" else -amount
         with contextlib.suppress(Exception):
@@ -912,13 +900,10 @@ class BrowserToolbox:
 
     def click_product_card(self) -> str:
         """
-        Улучшенный алгоритм клика по карточке товара.
+        Улучшенный алгоритм клика по карточке товара или слота.
 
-        Для Яндекс Лавки добавлены специальные правила:
-        - если мы на странице рецепта (url содержит 'recipes'), не кликаем по крупному
-          блоку рецепта, а ищем кнопку «К продуктам» / «К продуктам +»;
-        - при выборе карточек по размеру стараемся НЕ выбирать рецепты с текстом
-          вида «15 мин», «30 мин» — они понижаются в приоритете.
+        При выборе карточек по размеру стараемся НЕ выбирать информационные блоки
+        с текстом вида «15 мин» или похожими метками времени — они понижаются в приоритете.
         """
 
         self._ensure_page_alive()
@@ -926,36 +911,7 @@ class BrowserToolbox:
 
         search_tokens = _collect_search_tokens(page)
 
-        # 1) Обработка страницы рецепта Яндекс Лавки
-        try:
-            url = page.url or ""
-        except Exception:
-            url = ""
-
-        if "lavka.yandex" in url and "recipes" in url:
-            # На странице рецепта хотим перейти к продуктам, а не ещё одному рецепту
-            try:
-                btn = page.get_by_role(
-                    "button",
-                    name=re.compile("К продуктам", re.IGNORECASE),
-                )
-                if btn and btn.count() > 0:
-                    candidate = btn.first
-                    if candidate.is_visible(timeout=2000):
-                        candidate.click(timeout=4000)
-                        return "Нажал кнопку «К продуктам» на странице рецепта."
-            except Exception as exc:
-                logger.warning(f"[tools] click_product_card: no 'К продуктам' button: {exc}")
-
-            # Если не получилось, пробуем простой go_back
-            with contextlib.suppress(Exception):
-                page.go_back()
-            return (
-                "На странице рецепта не нашёл понятной кнопки перехода к продуктам. "
-                "Вернулся назад. Продолжай работу с сеткой товаров или поиском."
-            )
-
-        # 2) Обычный выбор большой карточки товара
+        # Обычный выбор большой карточки товара
         root = page.locator("main")
         try:
             if root.count() == 0:
