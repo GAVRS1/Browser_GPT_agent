@@ -6,6 +6,7 @@ import base64
 import re
 import textwrap
 import os
+from collections import deque
 from urllib.parse import parse_qs, unquote, urlparse
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 
 from browser.context import get_page
 from agent.llm_client import get_client
+from agent.tools_init import dom_snapshot
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +30,32 @@ class ToolResult:
     name: str
     success: bool
     observation: str
+
+
+@dataclass
+class ToolSchema:
+    """Описание инструмента в формате MCP с конвертацией в OpenAI."""
+
+    name: str
+    description: str
+    parameters: Dict[str, Any]
+
+    def as_openai(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+    def as_mcp(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.parameters,
+        }
 
 
 @dataclass
@@ -116,139 +144,138 @@ class BrowserToolbox:
     # ------------------------------------------------------------
     # OpenAI tool schemas
     # ------------------------------------------------------------
-    def openai_tools(self) -> List[Dict[str, Any]]:
+    def tool_schemas(self) -> List[ToolSchema]:
         return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "read_view",
-                    "description": "Собрать краткий список заметных элементов страницы и их текст.",
-                    "parameters": {"type": "object", "properties": {}},
+            ToolSchema(
+                name="read_view",
+                description="Собрать краткий список заметных элементов страницы и их текст.",
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolSchema(
+                name="open_url",
+                description=(
+                    "Перейти по указанному URL (используется, если агент хочет вручную открыть страницу)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {"url": {"type": "string"}},
+                    "required": ["url"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "open_url",
-                    "description": "Перейти по указанному URL (используется, если агент хочет вручную открыть страницу).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"url": {"type": "string"}},
-                        "required": ["url"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "click",
-                    "description": "Нажать на элемент по тексту, ARIA name или CSS-селектору (без заранее зашитых селекторов).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Текст/label/placeholder или CSS-селектор для поиска элемента.",
-                            },
+            ),
+            ToolSchema(
+                name="click",
+                description=(
+                    "Нажать на элемент по тексту, ARIA name или CSS-селектору (без заранее зашитых селекторов)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Текст/label/placeholder или CSS-селектор для поиска элемента.",
                         },
-                        "required": ["query"],
                     },
+                    "required": ["query"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "type_text",
-                    "description": "Ввести текст в поле по label/placeholder/CSS и при необходимости отправить (Enter).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Подпись/placeholder или CSS-селектор поля ввода.",
-                            },
-                            "text": {"type": "string"},
-                            "press_enter": {
-                                "type": "boolean",
-                                "description": "Нажать Enter после ввода.",
-                                "default": False,
-                            },
+            ),
+            ToolSchema(
+                name="type_text",
+                description="Ввести текст в поле по label/placeholder/CSS и при необходимости отправить (Enter).",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Подпись/placeholder или CSS-селектор поля ввода.",
                         },
-                        "required": ["query", "text"],
+                        "text": {"type": "string"},
+                        "press_enter": {
+                            "type": "boolean",
+                            "description": "Нажать Enter после ввода.",
+                            "default": False,
+                        },
                     },
+                    "required": ["query", "text"],
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "scroll",
-                    "description": (
-                        "Прокрутить страницу вверх/вниз на указанный отрезок. "
-                        "На страницах с сеткой карточек используй скролл осторожно: "
-                        "если уже видна сетка предложений, лучше сначала кликать по "
-                        "карточкам, а не скроллить."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "direction": {
-                                "type": "string",
-                                "enum": ["down", "up"],
-                                "default": "down",
-                            },
-                            "amount": {
-                                "type": "integer",
-                                "description": "Пиксели для скролла (по умолчанию 800).",
-                                "default": 800,
-                            },
+            ),
+            ToolSchema(
+                name="scroll",
+                description=(
+                    "Прокрутить страницу вверх/вниз на указанный отрезок. "
+                    "На страницах с сеткой карточек используй скролл осторожно: "
+                    "если уже видна сетка предложений, лучше сначала кликать по "
+                    "карточкам, а не скроллить."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "direction": {
+                            "type": "string",
+                            "enum": ["down", "up"],
+                            "default": "down",
+                        },
+                        "amount": {
+                            "type": "integer",
+                            "description": "Пиксели для скролла (по умолчанию 800).",
+                            "default": 800,
                         },
                     },
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "go_back",
-                    "description": "Вернуться на предыдущую страницу в истории браузера.",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "click_product_card",
-                    "description": (
-                        "Клик по одной из крупных карточек предложения в основной части страницы. "
-                        "Полезно, когда появилась сетка товаров/слотов, но к конкретной карточке "
-                        "сложно обратиться по тексту."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
+            ),
+            ToolSchema(
+                name="go_back",
+                description="Вернуться на предыдущую страницу в истории браузера.",
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolSchema(
+                name="click_product_card",
+                description=(
+                    "Клик по одной из крупных карточек предложения в основной части страницы. "
+                    "Полезно, когда появилась сетка товаров/слотов, но к конкретной карточке "
+                    "сложно обратиться по тексту."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolSchema(
+                name="take_screenshot",
+                description=(
+                    "Сделать скриншот текущей страницы. "
+                    "Возвращает путь к файлу скриншота, который можно посмотреть в логах."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "full_page": {
+                            "type": "boolean",
+                            "description": "Снимать всю страницу целиком (true) или только видимую область (false).",
+                            "default": False,
+                        }
                     },
                 },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "take_screenshot",
-                    "description": (
-                        "Сделать скриншот текущей страницы. "
-                        "Возвращает путь к файлу скриншота, который можно посмотреть в логах."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "full_page": {
-                                "type": "boolean",
-                                "description": "Снимать всю страницу целиком (true) или только видимую область (false).",
-                                "default": False,
-                            }
-                        },
+            ),
+            ToolSchema(
+                name="snapshot_accessibility",
+                description=(
+                    "Получить dom snapshot и компактное дерево доступности для анализа a11y рядом с DOM."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "max_nodes": {
+                            "type": "integer",
+                            "description": "Лимит узлов в accessibility tree для ответа (по умолчанию 120).",
+                            "default": 120,
+                        }
                     },
                 },
-            },
+            ),
         ]
+
+    def openai_tools(self) -> List[Dict[str, Any]]:
+        return [schema.as_openai() for schema in self.tool_schemas()]
+
+    def mcp_tools(self) -> List[Dict[str, Any]]:
+        return [schema.as_mcp() for schema in self.tool_schemas()]
 
     # ------------------------------------------------------------
     # Execution helpers
@@ -290,6 +317,12 @@ class BrowserToolbox:
                     tool_name,
                     True,
                     self.take_screenshot(bool(arguments.get("full_page", False))),
+                )
+            if tool_name == "snapshot_accessibility":
+                return ToolResult(
+                    tool_name,
+                    True,
+                    self.snapshot_accessibility(int(arguments.get("max_nodes", 120))),
                 )
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[tools] {tool_name} failed: {exc}")
@@ -334,6 +367,17 @@ class BrowserToolbox:
             logger.error(f"[tools] Screenshot failed: {exc}")
             # Пробрасываем наверх, чтобы execute() пометил инструмент как fail
             raise
+
+    def snapshot_accessibility(self, max_nodes: int = 120) -> str:
+        """Возвращает dom snapshot и уменьшенный accessibility tree."""
+
+        self._ensure_page_alive()
+        page = self.page
+
+        dom = dom_snapshot(max_text=5000, max_items=60)
+        a11y_tree = _safe_accessibility_tree(page, max_nodes=max_nodes)
+        payload = {"dom_snapshot": dom, "accessibility_tree": a11y_tree}
+        return json.dumps(payload, ensure_ascii=False)[:2400]
     def read_view(self) -> str:
         """Возвращает компактный обзор страницы.
 
@@ -1219,6 +1263,69 @@ def _extract_search_tokens_from_url(url: str) -> list[str]:
         seen.add(tok)
         unique_tokens.append(tok)
     return unique_tokens
+
+
+def _filter_a11y_node(raw: Dict[str, Any]) -> Dict[str, Any]:
+    allowed_keys = {
+        "role",
+        "name",
+        "value",
+        "description",
+        "checked",
+        "expanded",
+        "disabled",
+        "focused",
+        "pressed",
+        "selected",
+        "level",
+        "multiline",
+        "placeholder",
+        "readonly",
+        "required",
+        "roledescription",
+        "autocomplete",
+    }
+    filtered = {k: v for k, v in raw.items() if k in allowed_keys and v not in (None, "")}
+    return filtered
+
+
+def _safe_accessibility_tree(page: Page, max_nodes: int = 120) -> Dict[str, Any]:
+    try:
+        snapshot = page.accessibility.snapshot(interesting_only=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"[tools] Accessibility snapshot failed: {exc}")
+        return {"error": str(exc)}
+
+    if not snapshot:
+        return {}
+
+    queue: deque[tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = deque()
+    queue.append((snapshot, None))
+    root_copy: Optional[Dict[str, Any]] = None
+    produced = 0
+    last_copied: Optional[Dict[str, Any]] = None
+
+    while queue and produced < max_nodes:
+        node, parent_copy = queue.popleft()
+        filtered = _filter_a11y_node(node)
+        produced += 1
+        last_copied = filtered
+
+        if parent_copy is None:
+            root_copy = filtered
+        else:
+            parent_copy.setdefault("children", []).append(filtered)
+
+        children = node.get("children") or []
+        for child in children:
+            if produced + len(queue) >= max_nodes:
+                break
+            queue.append((child, filtered))
+
+    if queue and last_copied is not None:
+        last_copied["truncated"] = True
+
+    return root_copy or {}
 
 
 def _collect_search_tokens(page: Page) -> list[str]:
