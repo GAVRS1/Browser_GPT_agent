@@ -354,6 +354,8 @@ def _autonomous_browse(
         return "failed", "LLM недоступен — не могу управлять браузером"
 
     toolbox = BrowserToolbox()
+    mcp_tools = toolbox.mcp_tools()
+    tools_for_client = toolbox.openai_tools()
     observation = toolbox.read_view()
     screenshot_cache = ScreenshotCache()
     actions: List[str] = []
@@ -418,6 +420,8 @@ def _autonomous_browse(
         "- Скриншот помогает \"посмотреть глазами\", но не нужно вызывать его на каждом шаге.\n"
         "- Если скриншот уже сделан, повторно используй путь к нему из истории шага,\n"
         "  не вызывая инструмент заново без причины.\n"
+        "- Для одновременного анализа DOM и доступности используй snapshot_accessibility:\n"
+        "  он возвращает dom snapshot и компактное a11y-дерево.\n"
         "\n"
         "В конце обязательно дай финальный отчёт о сделанных шагах и результате.\n"
     )
@@ -430,8 +434,17 @@ def _autonomous_browse(
     user_parts.append(f"Текущая страница в браузере (краткое наблюдение): {observation}")
     user_content = "\n\n".join(user_parts)
 
+    mcp_note = {
+        "role": "system",
+        "content": (
+            "Инструменты описаны в формате MCP (name, description, input_schema). "
+            f"Список: {json.dumps(mcp_tools, ensure_ascii=False)}"
+        ),
+    }
+
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
+        mcp_note,
         {"role": "user", "content": user_content},
     ]
 
@@ -444,7 +457,7 @@ def _autonomous_browse(
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            tools=toolbox.openai_tools(),
+            tools=tools_for_client,
             temperature=0.1,
         )
 
