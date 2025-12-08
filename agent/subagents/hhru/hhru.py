@@ -1,49 +1,19 @@
 from __future__ import annotations
 
-import os
 import json
-import textwrap
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from playwright.sync_api import Page
 
 from browser.context import get_page
+from agent.debug_thoughts import log_thought
+from agent.subagents import SubAgentResult
 from agent.subagents.utils import matches_domain
 from agent.browser_tools import BrowserToolbox, format_tool_observation
 from agent.llm_client import get_client
 from agent.tools_init import dom_snapshot
 from config.sites import HHRU_HOME_URL
-
-
-# ----------------------------------------------------------------------------
-# Вспомогательный вывод "мыслей" подагента hh.ru
-# ----------------------------------------------------------------------------
-
-DEBUG_THOUGHTS = os.getenv("AGENT_DEBUG_THOUGHTS", "1") != "0"
-
-
-def _log_thought(text: str) -> None:
-    if not text:
-        return
-    logger.info(f"[hhru] thought: {text}")
-    if DEBUG_THOUGHTS:
-        print("\n🤖 hh.ru думает:")
-        print(textwrap.dedent(text).strip())
-        print()
-
-
-# ----------------------------------------------------------------------------
-# Результат работы подагента
-# ----------------------------------------------------------------------------
-
-@dataclass
-class SubAgentResult:
-    success: bool
-    status: str
-    details: str
-    error: Optional[str] = None
 
 
 # ----------------------------------------------------------------------------
@@ -73,7 +43,10 @@ class HhRuSubAgent:
         )
 
     def run(self, goal: str, plan: str) -> SubAgentResult:
-        _log_thought(f"Новая задача для hh.ru:\n{goal}\n\nПлан верхнего уровня:\n{plan}")
+        log_thought(
+            "hhru",
+            f"Новая задача для hh.ru:\n{goal}\n\nПлан верхнего уровня:\n{plan}",
+        )
 
         page = get_page()
         try:
@@ -225,7 +198,7 @@ class HhRuSubAgent:
 
             # Мысли LLM в этом шаге
             if msg.content:
-                _log_thought(f"Шаг {step_idx}:\n{msg.content}".strip())
+                log_thought("hhru", f"Шаг {step_idx}:\n{msg.content}".strip())
 
             assistant_msg: Dict[str, Any] = {
                 "role": "assistant",
@@ -242,9 +215,10 @@ class HhRuSubAgent:
                     logger.info(
                         f"[hhru] Using tool: {call.function.name} args={call.function.arguments}"
                     )
-                    _log_thought(
+                    log_thought(
+                        "hhru",
                         f"Вызываю инструмент {call.function.name} "
-                        f"с аргументами {call.function.arguments}"
+                        f"с аргументами {call.function.arguments}",
                     )
 
                     args = json.loads(call.function.arguments or "{}")  # type: ignore[arg-type]
@@ -252,8 +226,9 @@ class HhRuSubAgent:
                     formatted = format_tool_observation(result)
                     actions_log.append(formatted)
 
-                    _log_thought(
-                        f"Результат инструмента {call.function.name}: {formatted}"
+                    log_thought(
+                        "hhru",
+                        f"Результат инструмента {call.function.name}: {formatted}",
                     )
 
                     # проверка изменения observation
@@ -279,7 +254,7 @@ class HhRuSubAgent:
                         "Несколько шагов подряд не привели к заметным изменениям на hh.ru. "
                         "Подагент остановился, чтобы не зациклиться. Попробуйте сузить задачу."
                     )
-                    _log_thought(msg_text)
+                    log_thought("hhru", msg_text)
                     return "failed", msg_text, "no_progress"
 
                 continue
@@ -295,8 +270,8 @@ class HhRuSubAgent:
             ]
             full_report = "\n".join([p for p in report_parts if p])
 
-            _log_thought(
-                f"Финальный ответ подагента hh.ru:\n{final_text}".strip()
+            log_thought(
+                "hhru", f"Финальный ответ подагента hh.ru:\n{final_text}".strip()
             )
 
             return "completed", full_report, None
@@ -306,7 +281,7 @@ class HhRuSubAgent:
             "Цикл работы с hh.ru завершился без финального ответа после максимального числа шагов."
         )
         logger.warning(f"[hhru] {msg_text}")
-        _log_thought(msg_text)
+        log_thought("hhru", msg_text)
         return "failed", msg_text, "no_final_answer"
 
 

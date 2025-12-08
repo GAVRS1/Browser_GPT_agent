@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional
 
 from loguru import logger
 
-from .base import BaseSubAgent, SubAgentResult
+@dataclass
+class SubAgentResult:
+    """
+    Унифицированный результат работы под-агента.
+
+    success: итоговое булево — получилось ли в целом выполнить задачу.
+    status:  "completed" | "failed" | "needs_input" | другое служебное состояние.
+    details: человекочитаемый отчёт о том, что сделал агент.
+    error:   строка с кодом/описанием ошибки (если есть).
+    """
+
+    success: bool
+    status: str
+    details: str
+    error: Optional[str] = None
+
+
+from .base import BaseSubAgent
 from .rental import RentalPaymentSubAgent, RentalReservationSubAgent, RentalSearchSubAgent
 
 

@@ -4,7 +4,7 @@ from typing import List
 
 from loguru import logger
 
-from agent.subagents.base import BaseSubAgent, SubAgentResult
+from agent.subagents import BaseSubAgent, SubAgentResult
 
 
 class RentalSearchSubAgent(BaseSubAgent):
