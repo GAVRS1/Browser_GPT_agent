@@ -1,33 +1,18 @@
 from __future__ import annotations
 
+import contextlib
 import re
 from typing import Any
-import contextlib
-import os
 
 from loguru import logger
 
+from agent.debug_thoughts import log_thought
 from browser.context import get_page
 from agent.subagents.utils import matches_domain
 from agent.subagents.yandex_mail.common import open_mailbox
 from agent.subagents.yandex_mail.read_delete import run_read_delete_flow
 from agent.subagents.yandex_mail.reply import run_reply_flow
 from agent.subagents.yandex_mail.compose import run_compose_flow  # новый режим
-
-
-DEBUG_THOUGHTS = os.getenv("AGENT_DEBUG_THOUGHTS", "1") != "0"
-
-
-def log_thought(prefix: str, text: str) -> None:
-    """
-    Единая точка для вывода "мыслей" под-агента в логи и консоль.
-    prefix — короткое имя агента: 'yandex-mail', 'yandex-mail-spam' и т.п.
-    """
-    if not text:
-        return
-    logger.info(f"[{prefix}] thought: {text}")
-    if DEBUG_THOUGHTS:
-        print(f"\n🤖 {prefix} думает:\n{text.strip()}\n")
 
 
 class YandexMailSubAgent:

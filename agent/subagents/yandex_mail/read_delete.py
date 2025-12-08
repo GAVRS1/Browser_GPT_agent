@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import re
 import textwrap
 from typing import List, Tuple
@@ -10,6 +9,7 @@ from typing import List, Tuple
 from loguru import logger
 from playwright.sync_api import Page
 
+from agent.debug_thoughts import log_thought
 from agent.llm_client import get_client
 from agent.subagents.yandex_mail.common import (
     MessageDraft,
@@ -18,17 +18,6 @@ from agent.subagents.yandex_mail.common import (
     extract_body,
     format_summary,
 )
-
-
-DEBUG_THOUGHTS = os.getenv("AGENT_DEBUG_THOUGHTS", "1") != "0"
-
-
-def log_thought(prefix: str, text: str) -> None:
-    if not text:
-        return
-    logger.info(f"[{prefix}] thought: {text}")
-    if DEBUG_THOUGHTS:
-        print(f"\n🤖 {prefix} думает:\n{text.strip()}\n")
 
 
 def run_read_delete_flow(

@@ -1,24 +1,14 @@
 from __future__ import annotations
 
 import contextlib
-import os
 import re
-from typing import Optional, Any
+from typing import Any, Optional
 
-from loguru import logger
 from playwright.sync_api import Page
 
+from agent.debug_thoughts import log_thought
+from loguru import logger
 from agent.subagents.yandex_mail.common import ensure_mail_list
-
-DEBUG_THOUGHTS = os.getenv("AGENT_DEBUG_THOUGHTS", "1") != "0"
-
-
-def log_thought(prefix: str, text: str) -> None:
-    if not text:
-        return
-    logger.info(f"[{prefix}] thought: {text}")
-    if DEBUG_THOUGHTS:
-        print(f"\n🤖 {prefix} думает:\n{text.strip()}\n")
 
 
 def _find_first_visible(page: Page, locator) -> Optional[Any]:
