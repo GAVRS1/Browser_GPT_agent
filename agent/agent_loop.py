@@ -369,6 +369,7 @@ def _autonomous_browse(
     recent_signatures: List[str] = []  # история последних действий (имя + аргументы)
     no_progress_steps = 0              # шаги подряд без изменения наблюдения
     last_observation = observation     # последнее observation, чтобы сравнивать
+    waited_for_dom = False
 
     if DEBUG_THOUGHTS:
         print("\n=== Старт автономного режима ===")
@@ -416,6 +417,19 @@ def _autonomous_browse(
         {"role": "user", "content": user_content},
     ]
 
+    def _wait_for_dom(reason: str) -> None:
+        nonlocal waited_for_dom
+        wait_result = toolbox.execute("wait_for_dom_stable")
+        actions.append(f"{wait_result.name}: {'ok' if wait_result.success else 'fail'}")
+        actions.append(format_tool_observation(wait_result))
+        messages.append(
+            {
+                "role": "system",
+                "content": f"wait_for_dom_stable ({reason}): {wait_result.observation}",
+            }
+        )
+        waited_for_dom = True
+
     # Лимит шагов, чтобы не крутиться бесконечно
     for step_idx in range(30):
         reminder = screenshot_cache.reminder_message()
@@ -448,6 +462,7 @@ def _autonomous_browse(
 
         if message.tool_calls:
             step_made_progress = False
+            waited_for_dom = False
 
             for call in message.tool_calls:
                 # Подпись действия для детектора циклов
@@ -462,6 +477,8 @@ def _autonomous_browse(
 
                 # ВЫПОЛНЯЕМ инструмент до использования result
                 args = json.loads(call.function.arguments or "{}")
+                if call.function.name == "read_view" and not waited_for_dom:
+                    _wait_for_dom("before read_view")
                 result = toolbox.execute(call.function.name, args)
 
                 # Краткая строка результата
@@ -474,6 +491,8 @@ def _autonomous_browse(
                 if result.name == "take_screenshot" and result.success:
                     screenshot_cache.remember(result.observation)
                     actions.append(f"last_screenshot_cached: {screenshot_cache.last_link}")
+                if result.name == "open_url":
+                    _wait_for_dom("after open_url")
 
                 if DEBUG_THOUGHTS:
                     print(f"🛠 {short_line}")
@@ -548,6 +567,20 @@ def _autonomous_browse(
                             "наблюдение и попробуй другой инструмент или последовательность: "
                             "например, клик по другому элементу, прокрутку страницы, переход "
                             "к карточке товара и т.п."
+                        ),
+                    }
+                )
+                _wait_for_dom("no progress")
+                refreshed_view = toolbox.read_view()
+                actions.append("read_view: ok")
+                actions.append(f"read_view: {refreshed_view}")
+                last_observation = refreshed_view
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Обновлённое наблюдение после ожидания динамического контента: "
+                            f"{refreshed_view}"
                         ),
                     }
                 )

@@ -172,6 +172,13 @@ class BrowserToolbox:
                 parameters={"type": "object", "properties": {}},
             ),
             ToolSchema(
+                name="wait_for_dom_stable",
+                description=(
+                    "Подождать, пока страница стабилизируется: сеть успокоится и DOM перестанет меняться."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolSchema(
                 name="open_url",
                 description=(
                     "Перейти по указанному URL (используется, если агент хочет вручную открыть страницу)."
@@ -305,6 +312,8 @@ class BrowserToolbox:
         try:
             if tool_name == "read_view":
                 return ToolResult(tool_name, True, self.read_view())
+            if tool_name == "wait_for_dom_stable":
+                return ToolResult(tool_name, True, self.wait_for_dom_stable())
             if tool_name == "open_url":
                 return ToolResult(tool_name, True, self.open_url(arguments.get("url", "")))
             if tool_name == "click":
@@ -353,6 +362,46 @@ class BrowserToolbox:
     # ------------------------------------------------------------
     # Tools implementation
     # ------------------------------------------------------------
+
+    def wait_for_dom_stable(self) -> str:
+        """Ожидает стабилизацию DOM и сетевых запросов."""
+
+        self._ensure_page_alive()
+        page = self.page
+        timeout_ms = self._timeout_from_env("BROWSER_DOM_STABLE_TIMEOUT_MS", 8000, floor=2000)
+        interval_ms = self._timeout_from_env("BROWSER_DOM_STABLE_INTERVAL_MS", 500, floor=200)
+        stable_checks = self._timeout_from_env("BROWSER_DOM_STABLE_CHECKS", 3, floor=2)
+
+        network_idle = False
+        try:
+            page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            network_idle = True
+        except PlaywrightTimeoutError:
+            network_idle = False
+
+        stable = False
+        last_hash = None
+        stable_hits = 0
+        for _ in range(stable_checks):
+            try:
+                content = page.content()
+            except Exception:
+                break
+            content_hash = hash(content)
+            if last_hash == content_hash:
+                stable_hits += 1
+            else:
+                stable_hits = 0
+            last_hash = content_hash
+            if stable_hits >= 1:
+                stable = True
+                break
+            time.sleep(interval_ms / 1000)
+
+        status_parts = []
+        status_parts.append("network idle" if network_idle else "network idle timeout")
+        status_parts.append("dom stable" if stable else "dom still changing")
+        return f"wait_for_dom_stable: {', '.join(status_parts)}"
 
     def take_screenshot(self, full_page: bool = False) -> str:
         """
