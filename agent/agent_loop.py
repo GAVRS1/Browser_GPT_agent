@@ -348,6 +348,21 @@ def _safe_navigation(goal: str) -> str:
     logger.info(f"[agent] Navigating to {search_url}")
     page.goto(search_url)
     return search_url
+
+
+def _parse_needs_login(observation: str) -> Dict[str, Any]:
+    try:
+        payload = json.loads(observation)
+    except json.JSONDecodeError:
+        return {"needs_login": False}
+    if not isinstance(payload, dict):
+        return {"needs_login": False}
+    return {
+        "needs_login": bool(payload.get("needs_login")),
+        "login_indicators": payload.get("login_indicators", []),
+    }
+
+
 def _autonomous_browse(
     goal: str,
     plan_text: str,
@@ -363,6 +378,15 @@ def _autonomous_browse(
     mcp_tools = toolbox.mcp_tools()
     tools_for_client = toolbox.openai_tools()
     observation = toolbox.read_view()
+    login_state = _parse_needs_login(observation)
+    if login_state.get("needs_login"):
+        indicators = ", ".join(login_state.get("login_indicators", [])) or "unknown"
+        return (
+            "needs_input",
+            "Обнаружена страница входа (признаки: "
+            f"{indicators}). Пожалуйста, войдите вручную в браузере, "
+            "затем повторно запустите задачу — агент продолжит с текущей сессией.",
+        )
     screenshot_cache = ScreenshotCache()
     actions: List[str] = []
 
@@ -505,6 +529,19 @@ def _autonomous_browse(
                     actions.append(f"last_screenshot_cached: {screenshot_cache.last_link}")
                 if result.name == "open_url":
                     _wait_for_dom("after open_url")
+                if result.name == "read_view":
+                    login_state = _parse_needs_login(result.observation)
+                    if login_state.get("needs_login"):
+                        indicators = ", ".join(
+                            login_state.get("login_indicators", [])
+                        ) or "unknown"
+                        return (
+                            "needs_input",
+                            "Обнаружена страница входа (признаки: "
+                            f"{indicators}). Пожалуйста, войдите вручную в браузере, "
+                            "затем повторно запустите задачу — агент продолжит "
+                            "с текущей сессией.",
+                        )
 
                 if DEBUG_THOUGHTS:
                     print(f"🛠 {short_line}")
