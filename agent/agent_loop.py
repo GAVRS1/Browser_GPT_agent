@@ -75,6 +75,10 @@ _state: Dict[str, Any] = {
 }
 
 _console_confirmation_enabled = False
+_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_AGENT_STATE_DIR = os.path.join(_ROOT_DIR, "agent_state")
+_HISTORY_LOG_PATH = os.path.join(_AGENT_STATE_DIR, "history.log")
+_HISTORY_CONTEXT_LIMIT = 5
 
 # ============================================================================
 # State helpers
@@ -99,6 +103,55 @@ def _push_history(record: AttemptRecord) -> None:
 def _set_status(**kwargs: Any) -> None:
     with _state_lock:
         _state.update(kwargs)
+
+
+def _format_timestamp(epoch_seconds: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+
+
+def _summarize_record(record: AttemptRecord, limit: int = 220) -> str:
+    summary = record.details.strip() if record.details else ""
+    if not summary and record.error:
+        summary = record.error.strip()
+    if len(summary) > limit:
+        summary = summary[: limit - 3].rstrip() + "..."
+    return summary
+
+
+def _append_history_log(record: AttemptRecord) -> None:
+    if record.status == "started":
+        return
+
+    os.makedirs(_AGENT_STATE_DIR, exist_ok=True)
+    entry = {
+        "goal": record.goal,
+        "timestamp": _format_timestamp(record.timestamp),
+        "status": record.status,
+        "summary": _summarize_record(record),
+    }
+    with open(_HISTORY_LOG_PATH, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _load_recent_history(limit: int = _HISTORY_CONTEXT_LIMIT) -> List[Dict[str, str]]:
+    if not os.path.exists(_HISTORY_LOG_PATH):
+        return []
+
+    try:
+        with open(_HISTORY_LOG_PATH, "r", encoding="utf-8") as handle:
+            lines = [line.strip() for line in handle if line.strip()]
+    except OSError:
+        return []
+
+    recent: List[Dict[str, str]] = []
+    for line in lines[-limit:]:
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            recent.append(parsed)
+    return recent
 
 
 # ============================================================================
@@ -586,6 +639,8 @@ def run_agent(goal: str) -> None:
         previous_goal = _state.get("last_goal")
         previous_report = _state.get("last_report")
 
+    recent_history = _load_recent_history()
+
     _set_busy(True)
     _set_status(last_goal=goal, last_error=None)
 
@@ -617,13 +672,30 @@ def run_agent(goal: str) -> None:
 
         record.details = plan_text
 
-        prev_context = None
+        prev_context_parts: List[str] = []
         if previous_goal and previous_report:
             trimmed_report = previous_report[-1500:]
-            prev_context = (
-                f"Предыдущая задача пользователя: {previous_goal}\n"
-                f"Краткий отчёт о том, что уже сделано в браузере:\n{trimmed_report}"
+            prev_context_parts.append(
+                "Предыдущая задача пользователя: "
+                f"{previous_goal}\n"
+                "Краткий отчёт о том, что уже сделано в браузере:\n"
+                f"{trimmed_report}"
             )
+        if recent_history:
+            history_lines = [
+                "- [{timestamp}] {status}: {goal} — {summary}".format(
+                    timestamp=item.get("timestamp", "unknown"),
+                    status=item.get("status", "unknown"),
+                    goal=item.get("goal", "unknown"),
+                    summary=item.get("summary", "—"),
+                )
+                for item in recent_history
+            ]
+            prev_context_parts.append(
+                "Журнал предыдущих действий (последние записи):\n"
+                + "\n".join(history_lines)
+            )
+        prev_context = "\n\n".join(prev_context_parts) if prev_context_parts else None
 
         subagent = pick_subagent(goal)
         if subagent:
@@ -664,6 +736,7 @@ def run_agent(goal: str) -> None:
     finally:
         _set_busy(False)
         _print_report(record)
+        _append_history_log(record)
 
 
 def _print_report(record: AttemptRecord) -> None:
