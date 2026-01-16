@@ -17,6 +17,7 @@ from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeout
 
 from browser.context import get_page
 from agent.llm_client import get_client
+from agent.risk_guard import risky_keyword_matches
 from agent.tools_init import dom_snapshot
 
 
@@ -317,7 +318,13 @@ class BrowserToolbox:
             if tool_name == "open_url":
                 return ToolResult(tool_name, True, self.open_url(arguments.get("url", "")))
             if tool_name == "click":
-                return ToolResult(tool_name, True, self.click(arguments.get("query", "")))
+                result = self.click(
+                    arguments.get("query", ""),
+                    allow_risky=bool(arguments.get("_confirmed", False)),
+                )
+                if isinstance(result, ToolResult):
+                    return result
+                return ToolResult(tool_name, True, result)
             if tool_name == "type_text":
                 return ToolResult(
                     tool_name,
@@ -666,7 +673,7 @@ class BrowserToolbox:
 
         return f"Открыл {self.page.url}"
 
-    def click(self, query: str) -> str:
+    def click(self, query: str, allow_risky: bool = False) -> str | ToolResult:
         if not query:
             return "Пустой запрос — клик не выполнен"
 
@@ -705,6 +712,34 @@ class BrowserToolbox:
         chosen_summary = ""
 
         if candidate:
+            if not allow_risky:
+                attrs = _collect_attributes(candidate)
+                candidate_text = " ".join(
+                    [
+                        _safe_text(candidate),
+                        attrs.get("aria_label", ""),
+                        attrs.get("placeholder", ""),
+                        attrs.get("name", ""),
+                        attrs.get("id", ""),
+                    ]
+                ).strip()
+                query_matches = risky_keyword_matches(query)
+                element_matches = risky_keyword_matches(candidate_text)
+                risky_matches = sorted(set(query_matches + element_matches))
+                if risky_matches:
+                    result_message = (
+                        "needs_confirmation: найдено рискованное действие для клика "
+                        f"(совпадения: {', '.join(risky_matches)})"
+                    )
+                    chosen_summary = _describe_locator(candidate)
+                    _log_interaction(
+                        action="click",
+                        query=query,
+                        candidates=candidates,
+                        chosen_summary=chosen_summary,
+                        result=result_message,
+                    )
+                    return ToolResult("click", False, result_message)
             try:
                 # Критическое место: если Playwright залипнет, мы не повиснем навсегда
                 candidate.click(timeout=2000)
