@@ -11,6 +11,7 @@ from loguru import logger
 
 from agent.browser_tools import BrowserToolbox, format_tool_observation
 from agent.llm_client import get_client
+from agent.risk_guard import is_risky_text
 from agent.subagents import pick_subagent
 from browser.context import get_page, shutdown_browser
 from agent.debug_thoughts import DEBUG_THOUGHTS, log_thought
@@ -191,60 +192,7 @@ def _is_risky_goal(goal: str) -> bool:
     - оформление/оплата заказов или аренды;
     - отклики на вакансии / отправка резюме, заявок.
     """
-    text = goal.lower()
-
-    delete_keywords = [
-        "удали",
-        "удалить",
-        "удаляй",
-        "почисти",
-        "очисти",
-        "очистить",
-        "wipe",
-        "delete",
-        "remove",
-    ]
-
-    order_keywords = [
-        "закажи",
-        "заказать",
-        "закажи еду",
-        "закажи продукт",
-        "оформи заказ",
-        "оформить заказ",
-        "оформи",
-        "оформить",
-        "добавь в корзину",
-        "положи в корзину",
-        "положить в корзину",
-        "оплати",
-        "оплатить",
-        "оплата",
-        "checkout",
-        "pay",
-        "buy",
-        "purchase",
-    ]
-
-    job_keywords = [
-        "откликнись",
-        "откликнуться",
-        "откликнись на вакансию",
-        "откликнуться на вакансию",
-        "отправь отклик",
-        "отправить отклик",
-        "отправь резюме",
-        "отправить резюме",
-        "отправь отклик на вакансию",
-        "отправь заявку",
-        "отправить заявку",
-        "apply",
-        "send application",
-        "submit application",
-    ]
-
-    keywords = delete_keywords + order_keywords + job_keywords
-    return any(k in text for k in keywords)
+    return is_risky_text(goal)
 
 
 # ============================================================================
@@ -480,6 +428,17 @@ def _autonomous_browse(
                 if call.function.name == "read_view" and not waited_for_dom:
                     _wait_for_dom("before read_view")
                 result = toolbox.execute(call.function.name, args)
+                if isinstance(result.observation, str) and result.observation.startswith(
+                    "needs_confirmation:"
+                ):
+                    approved = _await_confirmation()
+                    actions.append(
+                        f"confirmation: {'approved' if approved else 'denied'}"
+                    )
+                    if approved:
+                        retry_args = dict(args)
+                        retry_args["_confirmed"] = True
+                        result = toolbox.execute(call.function.name, retry_args)
 
                 # Краткая строка результата
                 short_line = f"{result.name}: {'ok' if result.success else 'fail'}"
