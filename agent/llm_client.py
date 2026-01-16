@@ -39,18 +39,29 @@ def get_client() -> Optional[OpenAI]:
     if _client is not None:
         return _client
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    zai_api_key = os.getenv("ZAI_API_KEY", "").strip()
+    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = zai_api_key or openai_api_key
 
     if not api_key:
-        logger.error("[llm_client] OPENAI_API_KEY is not set!")
+        logger.error("[llm_client] ZAI_API_KEY or OPENAI_API_KEY is not set!")
         return None
+
+    base_url = None
+    if zai_api_key:
+        base_url = os.getenv("ZAI_BASE_URL", "https://api.z.ai/v1").strip()
+    else:
+        base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
 
     # Настраиваем прокси для HTTP
     apply_requests_proxy()
 
     try:
-        _client = OpenAI(api_key=api_key)
-        logger.info("[llm_client] OpenAI client initialized.")
+        if base_url:
+            _client = OpenAI(api_key=api_key, base_url=base_url)
+        else:
+            _client = OpenAI(api_key=api_key)
+        logger.info("[llm_client] OpenAI-compatible client initialized.")
         return _client
 
     except Exception as exc:
