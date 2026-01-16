@@ -347,6 +347,19 @@ def _safe_navigation(goal: str) -> str:
     logger.info(f"[agent] Navigating to {search_url}")
     page.goto(search_url)
     return search_url
+
+
+def _extract_needs_input(observation: str) -> Optional[str]:
+    try:
+        payload = json.loads(observation)
+    except json.JSONDecodeError:
+        return None
+
+    if isinstance(payload, dict) and payload.get("needs_input"):
+        return payload.get("needs_input_reason") or "страница требует ручного действия"
+    return None
+
+
 def _autonomous_browse(
     goal: str,
     plan_text: str,
@@ -362,6 +375,13 @@ def _autonomous_browse(
     mcp_tools = toolbox.mcp_tools()
     tools_for_client = toolbox.openai_tools()
     observation = toolbox.read_view()
+    needs_input_reason = _extract_needs_input(observation)
+    if needs_input_reason:
+        return (
+            "needs_input",
+            f"Требуется ручное действие: {needs_input_reason}. "
+            "Автономный цикл остановлен.",
+        )
     screenshot_cache = ScreenshotCache()
     actions: List[str] = []
 
@@ -493,6 +513,21 @@ def _autonomous_browse(
                     actions.append(f"last_screenshot_cached: {screenshot_cache.last_link}")
                 if result.name == "open_url":
                     _wait_for_dom("after open_url")
+                if result.name == "read_view" and result.success:
+                    needs_input_reason = _extract_needs_input(result.observation)
+                    if needs_input_reason:
+                        summary = "\n".join(actions[-8:])
+                        report_parts = [
+                            "Автономный отчёт:",
+                            summary or "(действия не требовались)",
+                            "",
+                            (
+                                "Требуется ручное действие: "
+                                f"{needs_input_reason}. Автономный цикл остановлен."
+                            ),
+                        ]
+                        full_report = "\n".join([part for part in report_parts if part])
+                        return "needs_input", full_report
 
                 if DEBUG_THOUGHTS:
                     print(f"🛠 {short_line}")
@@ -575,6 +610,19 @@ def _autonomous_browse(
                 actions.append("read_view: ok")
                 actions.append(f"read_view: {refreshed_view}")
                 last_observation = refreshed_view
+                needs_input_reason = _extract_needs_input(refreshed_view)
+                if needs_input_reason:
+                    report_parts = [
+                        "Автономный отчёт:",
+                        "\n".join(actions[-8:]) or "(действия не требовались)",
+                        "",
+                        (
+                            "Требуется ручное действие: "
+                            f"{needs_input_reason}. Автономный цикл остановлен."
+                        ),
+                    ]
+                    full_report = "\n".join([part for part in report_parts if part])
+                    return "needs_input", full_report
                 messages.append(
                     {
                         "role": "system",

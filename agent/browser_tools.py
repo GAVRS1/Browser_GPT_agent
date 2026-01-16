@@ -24,6 +24,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCREENSHOTS_DIR = PROJECT_ROOT / "screenshots"
 SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
+MANUAL_INPUT_HINTS: List[tuple[str, str]] = [
+    ("captcha", r"captcha"),
+    ("recaptcha", r"re\s*captcha"),
+    ("hcaptcha", r"hcaptcha"),
+    ("not_a_robot", r"i\s*(?:'|’)?m\s+not\s+a\s+robot"),
+    ("otp", r"\botp\b"),
+    ("2fa", r"\b2fa\b"),
+    ("two_factor", r"two[-\s]?factor"),
+    ("verification_code", r"verification\s+code|код\s+подтверждения|проверочн(?:ый|ого)\s+код"),
+    ("sms", r"\bsms\b|смс"),
+    ("payment", r"\bpayment\b|оплата|оплатить"),
+    ("checkout", r"\bcheckout\b"),
+    ("card", r"\bcard\b|карта|номер\s+карты"),
+    ("cvc_cvv", r"\b(?:cvc|cvv)\b"),
+    ("card_number", r"card\s+number"),
+    ("expiry", r"expiration|expiry|exp\.?\s*date|срок\s+действия"),
+]
+
 
 @dataclass
 class ToolResult:
@@ -498,6 +516,17 @@ class BrowserToolbox:
                 )
 
         summary["interactive"] = interactive[:40]
+
+        needs_input_hits = _detect_manual_input_hints(page, summary["interactive"])
+        if needs_input_hits:
+            summary["needs_input"] = True
+            summary["needs_input_reason"] = (
+                "Найдены признаки CAPTCHA/2FA/оплаты: "
+                + ", ".join(needs_input_hits)
+            )
+            summary["needs_input_hits"] = needs_input_hits
+        else:
+            summary["needs_input"] = False
 
         # --- Поиск крупных блоков-карточек товаров ---
         cards: List[Dict[str, Any]] = []
@@ -1226,6 +1255,36 @@ def _collect_attributes(locator: Locator) -> Dict[str, str]:
             if value:
                 attrs[key] = value[:200]
     return attrs
+
+
+def _detect_manual_input_hints(
+    page: Page, interactive: List[Dict[str, str]]
+) -> List[str]:
+    parts: List[str] = [safe_title(page), page.url]
+    for item in interactive:
+        text = item.get("text") or ""
+        if text:
+            parts.append(text)
+        attrs = item.get("attrs") or {}
+        for value in attrs.values():
+            if value:
+                parts.append(value)
+
+    with contextlib.suppress(Exception):
+        body_text = page.locator("body").inner_text(timeout=1000).strip()
+        if body_text:
+            parts.append(body_text[:4000])
+
+    combined = re.sub(r"\s+", " ", " ".join(parts)).strip()
+    if not combined:
+        return []
+
+    hits: List[str] = []
+    for label, pattern in MANUAL_INPUT_HINTS:
+        if re.search(pattern, combined, re.IGNORECASE):
+            hits.append(label)
+
+    return list(dict.fromkeys(hits))
 
 
 def _looks_like_css(query: str) -> bool:
