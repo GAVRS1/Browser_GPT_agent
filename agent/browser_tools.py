@@ -469,6 +469,7 @@ class BrowserToolbox:
         self._ensure_page_alive()
         page = self.page
         summary: Dict[str, Any] = {"url": page.url, "title": safe_title(page)}
+        summary.update(_detect_login_state(page))
 
         # --- Базовый список интерактивных элементов (кнопки, ссылки и т.п.) ---
         interactive: List[Dict[str, str]] = []
@@ -1765,6 +1766,50 @@ def _search_locators(page: Page, query: str, include_text_inputs: bool = False) 
     )))
 
     return locators
+
+
+def _detect_login_state(page: Page) -> Dict[str, Any]:
+    indicators: List[str] = []
+    url = ""
+    with contextlib.suppress(Exception):
+        url = page.url or ""
+
+    if re.search(r"/(login|signin|sign-in|auth|account/login|session)", url, re.IGNORECASE):
+        indicators.append("url")
+
+    try:
+        if page.locator("input[type='password']").count() > 0:
+            indicators.append("password_input")
+    except Exception:
+        pass
+
+    login_texts = [
+        "sign in",
+        "signin",
+        "sign-in",
+        "log in",
+        "login",
+        "войти",
+        "вход",
+        "авторизация",
+        "авторизоваться",
+        "аккаунт",
+    ]
+    login_pattern = re.compile("|".join(re.escape(text) for text in login_texts), re.IGNORECASE)
+
+    with contextlib.suppress(Exception):
+        if page.get_by_role("button", name=login_pattern).count() > 0:
+            indicators.append("button_text")
+
+    with contextlib.suppress(Exception):
+        if page.get_by_role("link", name=login_pattern).count() > 0:
+            indicators.append("link_text")
+
+    needs_login = bool(indicators)
+    payload: Dict[str, Any] = {"needs_login": needs_login}
+    if needs_login:
+        payload["login_indicators"] = indicators
+    return payload
 
 
 def format_tool_observation(result: ToolResult) -> str:
