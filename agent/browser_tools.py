@@ -506,6 +506,7 @@ class BrowserToolbox:
                 )
 
         summary["interactive"] = interactive[:40]
+        summary.update(_detect_manual_input_state(page, summary["interactive"]))
 
         # --- Поиск крупных блоков-карточек товаров ---
         cards: List[Dict[str, Any]] = []
@@ -1809,6 +1810,103 @@ def _detect_login_state(page: Page) -> Dict[str, Any]:
     payload: Dict[str, Any] = {"needs_login": needs_login}
     if needs_login:
         payload["login_indicators"] = indicators
+    return payload
+
+
+def _detect_manual_input_state(
+    page: Page, interactive: Optional[List[Dict[str, str]]] = None
+) -> Dict[str, Any]:
+    indicators: List[str] = []
+    text_chunks: List[str] = []
+    url = ""
+    with contextlib.suppress(Exception):
+        url = page.url or ""
+    if url:
+        text_chunks.append(url)
+
+    title = safe_title(page)
+    if title:
+        text_chunks.append(title)
+
+    if interactive:
+        for item in interactive:
+            text_chunks.append(item.get("text", ""))
+            attrs = item.get("attrs") or {}
+            text_chunks.extend(
+                [
+                    attrs.get("aria_label", ""),
+                    attrs.get("placeholder", ""),
+                    attrs.get("name", ""),
+                    attrs.get("id", ""),
+                ]
+            )
+
+    with contextlib.suppress(Exception):
+        body_text = page.locator("body").inner_text() or ""
+        if body_text:
+            text_chunks.append(body_text[:5000])
+
+    combined = " ".join(chunk for chunk in text_chunks if chunk).lower()
+
+    keyword_groups = {
+        "captcha": ["captcha", "recaptcha", "hcaptcha", "robot check", "i am not a robot"],
+        "2fa": [
+            "2fa",
+            "two-factor",
+            "two factor",
+            "otp",
+            "one-time",
+            "one time",
+            "verification code",
+            "код подтверждения",
+            "код из смс",
+            "смс",
+        ],
+        "payment": [
+            "payment",
+            "pay",
+            "checkout",
+            "billing",
+            "card",
+            "cvc",
+            "cvv",
+            "оплата",
+            "платеж",
+            "карта",
+            "картой",
+            "банковская",
+        ],
+    }
+
+    for group, keywords in keyword_groups.items():
+        for keyword in keywords:
+            if keyword.lower() in combined:
+                indicators.append(f"keyword:{group}:{keyword}")
+                break
+
+    with contextlib.suppress(Exception):
+        if page.locator(
+            "iframe[src*='captcha' i], iframe[title*='captcha' i], div[class*='captcha' i]"
+        ).count() > 0:
+            indicators.append("captcha_widget")
+
+    with contextlib.suppress(Exception):
+        if page.locator(
+            "input[autocomplete='one-time-code'], input[name*='otp' i], input[id*='otp' i]"
+        ).count() > 0:
+            indicators.append("otp_input")
+
+    with contextlib.suppress(Exception):
+        if page.locator(
+            "input[autocomplete^='cc-'], input[name*='card' i], "
+            "input[placeholder*='card' i], input[placeholder*='карта' i]"
+        ).count() > 0:
+            indicators.append("card_input")
+
+    needs_input = bool(indicators)
+    payload: Dict[str, Any] = {"needs_input": needs_input}
+    if needs_input:
+        payload["manual_input_indicators"] = sorted(set(indicators))
     return payload
 
 

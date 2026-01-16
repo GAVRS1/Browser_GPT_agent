@@ -363,6 +363,19 @@ def _parse_needs_login(observation: str) -> Dict[str, Any]:
     }
 
 
+def _parse_needs_input(observation: str) -> Dict[str, Any]:
+    try:
+        payload = json.loads(observation)
+    except json.JSONDecodeError:
+        return {"needs_input": False}
+    if not isinstance(payload, dict):
+        return {"needs_input": False}
+    return {
+        "needs_input": bool(payload.get("needs_input")),
+        "manual_input_indicators": payload.get("manual_input_indicators", []),
+    }
+
+
 def _autonomous_browse(
     goal: str,
     plan_text: str,
@@ -386,6 +399,16 @@ def _autonomous_browse(
             "Обнаружена страница входа (признаки: "
             f"{indicators}). Пожалуйста, войдите вручную в браузере, "
             "затем повторно запустите задачу — агент продолжит с текущей сессией.",
+        )
+    manual_state = _parse_needs_input(observation)
+    if manual_state.get("needs_input"):
+        indicators = ", ".join(manual_state.get("manual_input_indicators", [])) or "unknown"
+        return (
+            "needs_input",
+            "Обнаружен запрос на CAPTCHA/2FA/оплату (признаки: "
+            f"{indicators}). Пожалуйста, выполните требуемое действие вручную "
+            "в браузере, затем повторно запустите задачу — агент продолжит "
+            "с текущей сессией.",
         )
     screenshot_cache = ScreenshotCache()
     actions: List[str] = []
@@ -541,6 +564,18 @@ def _autonomous_browse(
                             f"{indicators}). Пожалуйста, войдите вручную в браузере, "
                             "затем повторно запустите задачу — агент продолжит "
                             "с текущей сессией.",
+                        )
+                    manual_state = _parse_needs_input(result.observation)
+                    if manual_state.get("needs_input"):
+                        indicators = ", ".join(
+                            manual_state.get("manual_input_indicators", [])
+                        ) or "unknown"
+                        return (
+                            "needs_input",
+                            "Обнаружен запрос на CAPTCHA/2FA/оплату (признаки: "
+                            f"{indicators}). Пожалуйста, выполните требуемое действие "
+                            "вручную в браузере, затем повторно запустите задачу — агент "
+                            "продолжит с текущей сессией.",
                         )
 
                 if DEBUG_THOUGHTS:
