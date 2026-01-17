@@ -25,6 +25,7 @@ from config.prompt_templates import (
     SESSION_RULES,
     compose_prompt,
 )
+from config.proxy import get_proxy_url
 from config.sites import AGENT_CONFIRMATION_TIMEOUT, GOOGLE_SEARCH_URL_TEMPLATE
 
 
@@ -306,25 +307,38 @@ def _run_llm_planning(goal: str) -> str:
         {"role": "user", "content": goal},
     ]
 
-    try:
-        response = client.chat.completions.create(
-            model=model_id,
+    def _request_plan(active_client) -> str:
+        response = active_client.chat.completions.create(
+            model=get_model_id(active_client),
             messages=messages,
             temperature=0.2,
         )
-        content = response.choices[0].message.content if response.choices else ""
+        return response.choices[0].message.content if response.choices else ""
 
-        logger.info(f"[agent] LLM plan: {content}")
-
-        if content:
-            log_thought("agent-plan", content)
-            print(content.strip())
-            print("-------------------\n")
-
-        return content or ""
+    try:
+        content = _request_plan(client)
     except Exception as exc:  # noqa: BLE001
         logger.error(f"[agent] Failed to query LLM: {exc}")
-        return ""
+        if not get_proxy_url():
+            return ""
+        logger.warning("[agent] Retrying LLM request without proxy.")
+        fallback_client = get_client(force_no_proxy=True)
+        if fallback_client is None:
+            return ""
+        try:
+            content = _request_plan(fallback_client)
+        except Exception as retry_exc:  # noqa: BLE001
+            logger.error(f"[agent] LLM retry without proxy failed: {retry_exc}")
+            return ""
+
+    logger.info(f"[agent] LLM plan: {content}")
+
+    if content:
+        log_thought("agent-plan", content)
+        print(content.strip())
+        print("-------------------\n")
+
+    return content or ""
 
 
 def _safe_navigation(goal: str) -> str:
