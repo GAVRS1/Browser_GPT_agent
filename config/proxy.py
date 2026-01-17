@@ -97,9 +97,7 @@ def apply_requests_proxy() -> None:
     """
     proxy = get_proxy_url()
     if not proxy:
-        for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-            os.environ.pop(key, None)
-        logger.info("[proxy] HTTP(S) proxy env vars cleared.")
+        clear_requests_proxy()
         return
 
     os.environ["HTTP_PROXY"] = proxy
@@ -107,6 +105,14 @@ def apply_requests_proxy() -> None:
     os.environ["http_proxy"] = proxy
     os.environ["https_proxy"] = proxy
     logger.info(f"[proxy] HTTP(S) proxy env vars set to {proxy!r}.")
+
+
+def clear_requests_proxy() -> None:
+    """Очищает HTTP(S) proxy переменные окружения."""
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        os.environ.pop(key, None)
+    logger.info("[proxy] HTTP(S) proxy env vars cleared.")
 
 
 def get_playwright_proxy() -> dict | None:
