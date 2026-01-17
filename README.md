@@ -10,7 +10,13 @@ Browser GPT Agent — автономный AI-агент на Python, работ
 
 ## ⚙️ Настройка .env
 ```plaintext
+LLM_PROVIDER=gpt # gpt или glm
 OPENAI_API_KEY= # ключ OpenAI
+OPENAI_MODEL= # модель OpenAI (опционально)
+OPENAI_BASE_URL= # кастомный OpenAI-совместимый URL (опционально)
+GLM_API_KEY= # ключ ZhipuAI (для glm)
+GLM_MODEL=glm-4.6 # модель GLM (опционально)
+GLM_BASE_URL=https://api.z.ai/v1 # базовый URL для GLM API
 PROXY= # прокси для запросов к API (опционально)
 BROWSER_PROXY= # включение/выключение прокси в браузере, false чтобы прокси был только у агента
 # таймауты по умолчанию
