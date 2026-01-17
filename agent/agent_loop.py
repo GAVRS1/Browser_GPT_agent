@@ -10,7 +10,7 @@ from urllib.parse import quote_plus
 from loguru import logger
 
 from agent.browser_tools import BrowserToolbox, format_tool_observation
-from agent.llm_client import get_client
+from agent.llm_client import get_client, get_model_id
 from agent.risk_guard import is_risky_text
 from agent.subagents import pick_subagent
 from browser.context import get_page, shutdown_browser
@@ -261,15 +261,7 @@ def _run_llm_planning(goal: str) -> str:
     if client is None:
         return ""
 
-    model_list = getattr(getattr(client, "models", None), "list", lambda: None)()
-    if model_list and getattr(model_list, "data", None):
-        model_id = model_list.data[0].id
-    else:
-        model_id = "gpt-4o-mini"
-
-    override = os.getenv("OPENAI_MODEL")
-    if override:
-        model_id = override
+    model_id = get_model_id(client)
 
     system_text = (
         "You are an autonomous browser automation agent.\n"
