@@ -1,3 +1,4 @@
+import inspect
 import os
 from typing import Optional
 
@@ -114,7 +115,12 @@ def get_client(force_no_proxy: bool = False) -> Optional[OpenAI]:
         if proxy_url:
             if _http_client:
                 _http_client.close()
-            _http_client = httpx.Client(proxies=proxy_url, trust_env=False)
+            client_kwargs = {"trust_env": False}
+            if "proxy" in inspect.signature(httpx.Client).parameters:
+                client_kwargs["proxy"] = proxy_url
+            else:
+                client_kwargs["proxies"] = proxy_url
+            _http_client = httpx.Client(**client_kwargs)
             logger.info(f"[llm_client] OpenAI client will use proxy: {proxy_url!r}")
         else:
             if _http_client:
