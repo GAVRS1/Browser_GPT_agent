@@ -15,6 +15,12 @@ from agent.risk_guard import is_risky_text
 from agent.subagents import pick_subagent
 from browser.context import shutdown_browser
 from agent.debug_thoughts import DEBUG_THOUGHTS, log_thought
+from agent.console_status import (
+    action_status,
+    plan_status,
+    step_status,
+    tool_status,
+)
 from config.prompt_templates import (
     BROWSER_ACTION_RULES,
     BROWSER_CONTEXT,
@@ -335,8 +341,11 @@ def _run_llm_planning(goal: str) -> str:
 
     if content:
         log_thought("agent-plan", content)
-        print(content.strip())
-        print("-------------------\n")
+        if DEBUG_THOUGHTS:
+            print(content.strip())
+            print("-------------------\n")
+        else:
+            print(plan_status(content))
 
     return content or ""
 
@@ -420,6 +429,8 @@ def _autonomous_browse(
             print("\nТекущее краткое наблюдение за страницей:")
             print(observation)
             print("=================================\n")
+        else:
+            print(action_status("Автономный режим", "старт"))
     
         system_prompt = compose_prompt(
             BROWSER_CONTEXT,
@@ -548,6 +559,8 @@ def _autonomous_browse(
                         print("\n🤖 Мысли агента (шаг):")
                         print(thought)
                         print()
+                    else:
+                        print(step_status(step_idx))
     
             if tool_calls:
                 step_made_progress = False
@@ -623,6 +636,8 @@ def _autonomous_browse(
                     if DEBUG_THOUGHTS:
                         print(f"🛠 {short_line}")
                         print(f"   Аргументы: {call['arguments']}")
+                    else:
+                        print(tool_status(result.name, result.success))
     
                     # Проверяем, изменилось ли наблюдение (DOM / состояние)
                     if result.observation and result.observation != last_observation:
@@ -735,6 +750,8 @@ def _autonomous_browse(
                 print("\n✅ Финальный ответ агента:")
                 print(final_text)
                 print()
+            else:
+                print(action_status("Ответ", "получен"))
     
             return "completed", full_report
     
@@ -867,7 +884,15 @@ def _print_report(record: AttemptRecord) -> None:
     if record.error:
         status_line += f" (ошибка: {record.error})"
 
-    print("\n".join([header, status_line, "", record.details]))
+    if DEBUG_THOUGHTS:
+        print("\n".join([header, status_line, "", record.details]))
+        return
+
+    summary = _summarize_record(record, limit=300)
+    lines = [header, status_line]
+    if summary:
+        lines.extend(["", summary])
+    print("\n".join(lines))
 
 
 __all__ = [

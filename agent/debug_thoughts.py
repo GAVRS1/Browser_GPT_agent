@@ -2,7 +2,7 @@
 import os
 from loguru import logger
 
-DEBUG_THOUGHTS = os.getenv("AGENT_DEBUG_THOUGHTS", "1") != "0"
+DEBUG_THOUGHTS = os.getenv("AGENT_DEBUG_THOUGHTS", "0") == "1"
 
 
 def log_thought(prefix: str, text: str) -> None:
