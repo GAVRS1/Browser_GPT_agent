@@ -5,7 +5,6 @@ import json
 import base64
 import re
 import textwrap
-import os
 from collections import deque
 from urllib.parse import parse_qs, unquote, urlparse
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ from browser.context import get_page
 from agent.llm_client import get_client
 from agent.risk_guard import risky_keyword_matches
 from agent.tools_init import dom_snapshot
+from config import timeouts
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -91,31 +91,6 @@ class BrowserToolbox:
         self.screenshots_dir = screenshots_dir or SCREENSHOTS_DIR
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _timeout_from_env(env_var: str, default: int, *, floor: Optional[int] = None) -> int:
-        """Возвращает числовой таймаут из env с fallback.
-
-        Если переменная невалидна или меньше заданного минимума —
-        используется дефолт. Такой подход защищает от слишком коротких
-        значений (например, 500 мс), которые ломают навигацию.
-        """
-
-        try:
-            value = int(os.getenv(env_var, default))
-        except ValueError:
-            return default
-
-        if floor is not None:
-            return max(value, floor)
-        return value
-
-    def _navigation_timeout_ms(self) -> int:
-        """Таймаут навигации с безопасным минимумом (5 секунд)."""
-
-        return self._timeout_from_env(
-            "BROWSER_NAVIGATION_TIMEOUT_MS", 12000, floor=5000
-        )
-
     def _apply_default_timeouts(self, page: Page) -> None:
         """Настраивает дефолтные таймауты Playwright с учётом навигации.
 
@@ -127,10 +102,8 @@ class BrowserToolbox:
         BROWSER_NAVIGATION_TIMEOUT_MS.
         """
 
-        default_timeout_ms = self._timeout_from_env(
-            "BROWSER_DEFAULT_TIMEOUT_MS", 3000, floor=500
-        )
-        navigation_timeout_ms = self._navigation_timeout_ms()
+        default_timeout_ms = timeouts.default_action_timeout_ms()
+        navigation_timeout_ms = timeouts.navigation_timeout_ms()
 
         # Навигацию даём дольше, чтобы страница успела загрузиться; короткие
         # таймауты для действий помогают не зависать на недоступных элементах.
@@ -375,9 +348,9 @@ class BrowserToolbox:
 
         self._ensure_page_alive()
         page = self.page
-        timeout_ms = self._timeout_from_env("BROWSER_DOM_STABLE_TIMEOUT_MS", 8000, floor=2000)
-        interval_ms = self._timeout_from_env("BROWSER_DOM_STABLE_INTERVAL_MS", 500, floor=200)
-        stable_checks = self._timeout_from_env("BROWSER_DOM_STABLE_CHECKS", 3, floor=2)
+        timeout_ms = timeouts.dom_stable_timeout_ms()
+        interval_ms = timeouts.dom_stable_interval_ms()
+        stable_checks = timeouts.dom_stable_checks()
 
         network_idle = False
         try:
@@ -646,7 +619,7 @@ class BrowserToolbox:
         if not url:
             return "URL не задан"
         self._ensure_page_alive()
-        navigation_timeout_ms = self._navigation_timeout_ms()
+        navigation_timeout_ms = timeouts.navigation_timeout_ms()
         try:
             self.page.goto(
                 url, wait_until="domcontentloaded", timeout=navigation_timeout_ms
@@ -657,7 +630,9 @@ class BrowserToolbox:
                 navigation_timeout_ms,
                 exc,
             )
-            extended_timeout_ms = max(int(navigation_timeout_ms * 1.5), 15000)
+            extended_timeout_ms = max(
+                int(navigation_timeout_ms * 1.5), timeouts.navigation_retry_min_timeout_ms()
+            )
             try:
                 self.page.goto(
                     url, wait_until="domcontentloaded", timeout=extended_timeout_ms
@@ -744,7 +719,7 @@ class BrowserToolbox:
                     return ToolResult("click", False, result_message)
             try:
                 # Критическое место: если Playwright залипнет, мы не повиснем навсегда
-                candidate.click(timeout=2000)
+                candidate.click(timeout=timeouts.click_timeout_ms())
                 result_message = f"Клик по {query} выполнен"
                 chosen_summary = _describe_locator(candidate)
             except PlaywrightTimeoutError as exc:
@@ -1027,11 +1002,11 @@ class BrowserToolbox:
 
     def _focus_and_fill(self, locator: Locator, text: str, press_enter: bool) -> None:
         with contextlib.suppress(Exception):
-            locator.wait_for(state="attached", timeout=2000)
-            locator.scroll_into_view_if_needed(timeout=2000)
+            locator.wait_for(state="attached", timeout=timeouts.locator_attach_timeout_ms())
+            locator.scroll_into_view_if_needed(timeout=timeouts.locator_scroll_timeout_ms())
 
-        locator.click(timeout=2000, force=True)
-        locator.fill(text, timeout=3000)
+        locator.click(timeout=timeouts.locator_click_timeout_ms(), force=True)
+        locator.fill(text, timeout=timeouts.locator_fill_timeout_ms())
         if press_enter:
             locator.press("Enter")
 
@@ -1203,7 +1178,7 @@ class BrowserToolbox:
                 if not target:
                     continue
                 try:
-                    target.click(timeout=4000, force=True)
+                    target.click(timeout=timeouts.card_click_timeout_ms(), force=True)
                     clicked = True
                     break
                 except Exception as exc:  # noqa: BLE001
@@ -1241,7 +1216,7 @@ def safe_title(page: Page) -> str:
 
 def _safe_text(locator: Locator) -> str:
     with contextlib.suppress(Exception):
-        text = locator.inner_text(timeout=1000).strip()
+        text = locator.inner_text(timeout=timeouts.text_read_timeout_ms()).strip()
         if text:
             return re.sub(r"\s+", " ", text)
     return ""
@@ -1287,7 +1262,7 @@ def _describe_locator(locator: Optional[Locator]) -> str:
             parts.append(f"<{tag}>")
 
     with contextlib.suppress(Exception):
-        text = locator.inner_text(timeout=800) or ""
+        text = locator.inner_text(timeout=timeouts.text_snippet_timeout_ms()) or ""
         text = _truncate(re.sub(r"\s+", " ", text.strip()))
         if text:
             parts.append(f"text='{text}'")
@@ -1324,7 +1299,7 @@ def _collect_candidates_for_logging(
 
         visible = False
         with contextlib.suppress(Exception):
-            visible = candidate.is_visible(timeout=1500)
+            visible = candidate.is_visible(timeout=timeouts.visibility_timeout_ms())
 
         summary = _describe_locator(candidate)
         candidates.append({"summary": summary, "visible": visible})
@@ -1378,7 +1353,7 @@ def _first_visible(
 
         with contextlib.suppress(Exception):
             candidate = locator.first
-            if candidate.is_visible(timeout=1500):
+            if candidate.is_visible(timeout=timeouts.visibility_timeout_ms()):
                 return candidate
 
             if allow_hidden_fallback and hidden_candidate is None:
@@ -1509,7 +1484,7 @@ def _collect_search_tokens(page: Page) -> list[str]:
     for i in range(max_inputs):
         locator = search_inputs.nth(i)
         with contextlib.suppress(Exception):
-            value = locator.input_value(timeout=800) or ""
+            value = locator.input_value(timeout=timeouts.input_value_timeout_ms()) or ""
             tokens.extend(_tokenize(value))
 
     seen: set[str] = set()
@@ -1558,7 +1533,7 @@ def _find_add_button(container: Locator) -> Optional[Locator]:
                 re.IGNORECASE,
             )
         )
-        if button.count() > 0 and button.first.is_enabled(timeout=800):
+        if button.count() > 0 and button.first.is_enabled(timeout=timeouts.button_enabled_timeout_ms()):
             return button.first
     except Exception:
         return None

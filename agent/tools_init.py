@@ -7,6 +7,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from browser.context import get_page
 from config.proxy import apply_requests_proxy
+from config import timeouts
 
 
 _initialized = False
@@ -100,7 +101,7 @@ def dom_snapshot(max_text: int = 6000, max_items: int = 40) -> Dict[str, Any]:
         }
 
 
-def click(selector: str, timeout_ms: int = 5000) -> Dict[str, Any]:
+def click(selector: str, timeout_ms: int | None = None) -> Dict[str, Any]:
     """
     Кликает по элементу, выбранному под-агентом через CSS-селектор.
 
@@ -108,6 +109,9 @@ def click(selector: str, timeout_ms: int = 5000) -> Dict[str, Any]:
     """
     page = _current_page()
     logger.info(f"[tools] click(selector={selector!r})")
+
+    if timeout_ms is None:
+        timeout_ms = timeouts.tool_action_timeout_ms()
 
     try:
         locator = page.locator(selector).first
@@ -122,7 +126,9 @@ def click(selector: str, timeout_ms: int = 5000) -> Dict[str, Any]:
         return {"ok": False, "selector": selector, "error": str(exc)}
 
 
-def click_by_text(text_query: str, timeout_ms: int = 5000, fuzzy: bool = True) -> Dict[str, Any]:
+def click_by_text(
+    text_query: str, timeout_ms: int | None = None, fuzzy: bool = True
+) -> Dict[str, Any]:
     """
     Находит кликаемый элемент по видимому тексту и нажимает его.
 
@@ -180,12 +186,17 @@ def click_by_text(text_query: str, timeout_ms: int = 5000, fuzzy: bool = True) -
         return {"ok": False, "error": str(exc), "selector": None}
 
 
-def type_text(selector: str, text: str, clear: bool = True, timeout_ms: int = 5000) -> Dict[str, Any]:
+def type_text(
+    selector: str, text: str, clear: bool = True, timeout_ms: int | None = None
+) -> Dict[str, Any]:
     """
     Вводит текст в поле (input / textarea), выбранное логикой агента через CSS-селектор.
     """
     page = _current_page()
     logger.info(f"[tools] type_text(selector={selector!r}, text_len={len(text)})")
+
+    if timeout_ms is None:
+        timeout_ms = timeouts.tool_action_timeout_ms()
 
     try:
         locator = page.locator(selector).first
@@ -203,13 +214,16 @@ def type_text(selector: str, text: str, clear: bool = True, timeout_ms: int = 50
         return {"ok": False, "selector": selector, "error": str(exc)}
 
 
-def wait_for_dom_stable(timeout_ms: int = 5000) -> Dict[str, Any]:
+def wait_for_dom_stable(timeout_ms: int | None = None) -> Dict[str, Any]:
     """
     Грубый способ дождаться стабилизации страницы:
     ждём пока не изменится размер DOM/документа.
     """
     page = _current_page()
     logger.info("[tools] wait_for_dom_stable")
+
+    if timeout_ms is None:
+        timeout_ms = timeouts.tool_dom_stable_timeout_ms()
 
     try:
         result = page.evaluate(
