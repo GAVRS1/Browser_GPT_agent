@@ -32,7 +32,7 @@ from config.prompt_templates import (
     compose_prompt,
 )
 from config.proxy import get_proxy_url
-from config.sites import AGENT_CONFIRMATION_TIMEOUT
+from config.sites import AGENT_CONFIRMATION_TIMEOUT, GOOGLE_SEARCH_URL_TEMPLATE
 
 
 @dataclass
@@ -376,6 +376,23 @@ def _parse_needs_input(observation: str) -> Dict[str, Any]:
     }
 
 
+def _safe_navigation(
+    mcp_client: MCPToolClient,
+    url: Optional[str],
+) -> tuple[Optional[ToolResult], Optional[str]]:
+    if not url:
+        fallback_hint = ""
+        if not GOOGLE_SEARCH_URL_TEMPLATE:
+            fallback_hint = " Задайте GOOGLE_SEARCH_URL_TEMPLATE в .env."
+        return (
+            None,
+            "Стартовый URL не задан. Пожалуйста, укажите стартовую страницу в запросе."
+            + fallback_hint,
+        )
+    call_result = mcp_client.call_tool("open_url", {"url": url})
+    return ToolResult("open_url", call_result.success, call_result.observation), None
+
+
 def _autonomous_browse(
     goal: str,
     plan_text: str,
@@ -580,8 +597,20 @@ def _autonomous_browse(
                     args = json.loads(call["arguments"] or "{}")
                     if call["name"] == "read_view" and not waited_for_dom:
                         _wait_for_dom("before read_view")
-                    call_result = mcp_client.call_tool(call["name"], args)
-                    result = ToolResult(call["name"], call_result.success, call_result.observation)
+                    if call["name"] == "open_url":
+                        result, missing_url_message = _safe_navigation(
+                            mcp_client,
+                            args.get("url"),
+                        )
+                        if missing_url_message:
+                            return "needs_input", missing_url_message
+                    else:
+                        call_result = mcp_client.call_tool(call["name"], args)
+                        result = ToolResult(
+                            call["name"],
+                            call_result.success,
+                            call_result.observation,
+                        )
                     if isinstance(result.observation, str) and result.observation.startswith(
                         "needs_confirmation:"
                     ):
