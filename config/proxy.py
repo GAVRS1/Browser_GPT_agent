@@ -1,5 +1,6 @@
+import importlib.util
 import os
-from urllib.parse import unquote, urlparse
+from urllib.parse import ParseResult, quote, unquote, urlparse, urlunparse
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -59,6 +60,91 @@ def _build_url_from_short_notation(raw: str) -> str | None:
     return None
 
 
+def _ensure_supported_proxy_scheme(parsed: ParseResult) -> bool:
+    scheme = (parsed.scheme or "").lower()
+    if scheme.startswith("socks"):
+        socks_support = importlib.util.find_spec("socksio")
+        if socks_support is None:
+            logger.error(
+                "[proxy] SOCKS proxy requested but httpx[socks] is not installed; "
+                "install extras or use an HTTP proxy."
+            )
+            return False
+    return True
+
+
+def _build_proxy_netloc(
+    hostname: str | None,
+    port: int | None,
+    username: str | None,
+    password: str | None,
+) -> str:
+    if not hostname:
+        return ""
+
+    host = hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+
+    if port:
+        host = f"{host}:{port}"
+
+    if username:
+        user = quote(username, safe="")
+        if password:
+            pwd = quote(password, safe="")
+            return f"{user}:{pwd}@{host}"
+        return f"{user}@{host}"
+
+    return host
+
+
+def _sanitize_proxy_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.hostname:
+        logger.error(f"[proxy] Invalid PROXY URL: {url!r}")
+        return None
+
+    if not _ensure_supported_proxy_scheme(parsed):
+        return None
+
+    netloc = _build_proxy_netloc(
+        parsed.hostname,
+        parsed.port,
+        parsed.username,
+        parsed.password,
+    )
+    return urlunparse(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
+def _proxy_log_sanitized(parsed: ParseResult) -> str:
+    netloc = _build_proxy_netloc(
+        parsed.hostname,
+        parsed.port,
+        parsed.username,
+        None,
+    )
+    return urlunparse(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
 def get_proxy_url() -> str | None:
     """
     Возвращает строку прокси из PROXY, если она включена.
@@ -76,14 +162,22 @@ def get_proxy_url() -> str | None:
 
     # Если указали протокол явно — считаем, что это уже URL
     if "://" in raw:
-        logger.info(f"[proxy] Using PROXY as URL: {raw}")
-        return raw
+        sanitized = _sanitize_proxy_url(raw)
+        if not sanitized:
+            return None
+        log_proxy = _proxy_log_sanitized(urlparse(sanitized))
+        logger.info(f"[proxy] Using PROXY as URL: {log_proxy}")
+        return sanitized
 
     # Пытаемся распарсить сокращённую форму
     url = _build_url_from_short_notation(raw)
     if url:
-        logger.info(f"[proxy] Normalized short PROXY to URL: {url}")
-        return url
+        sanitized = _sanitize_proxy_url(url)
+        if not sanitized:
+            return None
+        log_proxy = _proxy_log_sanitized(urlparse(sanitized))
+        logger.info(f"[proxy] Normalized short PROXY to URL: {log_proxy}")
+        return sanitized
 
     logger.error(f"[proxy] Failed to interpret PROXY: {raw!r}")
     return None
@@ -104,7 +198,8 @@ def apply_requests_proxy() -> None:
     os.environ["HTTPS_PROXY"] = proxy
     os.environ["http_proxy"] = proxy
     os.environ["https_proxy"] = proxy
-    logger.info(f"[proxy] HTTP(S) proxy env vars set to {proxy!r}.")
+    log_proxy = _proxy_log_sanitized(urlparse(proxy))
+    logger.info(f"[proxy] HTTP(S) proxy env vars set to {log_proxy!r}.")
 
 
 def clear_requests_proxy() -> None:
@@ -141,7 +236,9 @@ def get_playwright_proxy() -> dict | None:
     if parsed.password:
         cfg["password"] = unquote(parsed.password)
 
-    logger.info(f"[proxy] Playwright proxy config: {cfg}")
+    cfg_log = cfg.copy()
+    cfg_log.pop("password", None)
+    logger.info(f"[proxy] Playwright proxy config: {cfg_log}")
     return cfg
 
 
