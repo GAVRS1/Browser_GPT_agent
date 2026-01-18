@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Callable, TypeVar
+from typing import Callable, Optional, TypeVar
 
 from dotenv import load_dotenv
 
@@ -22,9 +22,7 @@ def _read_env(parser: Callable[[str], T], env_name: str, default: T) -> T:
 
 
 # Common / generic
-GOOGLE_SEARCH_URL_TEMPLATE: str = os.getenv(
-    "GOOGLE_SEARCH_URL_TEMPLATE", "https://www.google.com/search?q={query}"
-)
+GOOGLE_SEARCH_URL_TEMPLATE: Optional[str] = os.getenv("GOOGLE_SEARCH_URL_TEMPLATE")
 
 # Время ожидания подтверждения рискованных действий.
 # Не привязываемся к сайтам, чтобы архитектура оставалась универсальной.
