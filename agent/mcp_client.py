@@ -170,11 +170,9 @@ class MCPToolClient:
         return [
             {
                 "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("input_schema", {}),
-                },
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema", {}),
             }
             for tool in tools
         ]
