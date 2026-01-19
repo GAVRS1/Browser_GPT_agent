@@ -742,18 +742,6 @@ class BrowserToolbox:
         page = self.page
 
         if _looks_like_search_intent(query):
-            search_url = _build_search_url(text) if text else None
-            if search_url:
-                result_message = self.open_url(search_url)
-                _log_interaction(
-                    action="type_text-search-url",
-                    query=query,
-                    candidates=[],
-                    chosen_summary="",
-                    result=result_message,
-                )
-                return result_message
-
             direct_locator = _first_visible(
                 _search_locators(page, query, include_text_inputs=True),
                 allow_hidden_fallback=True,
@@ -794,6 +782,19 @@ class BrowserToolbox:
                         query=query,
                         candidates=candidates,
                         chosen_summary=_describe_locator_from_hint(vision_hint),
+                        result=result_message,
+                    )
+                    return result_message
+
+            if text and _looks_like_web_search_request(query, text):
+                search_url = _build_search_url(text)
+                if search_url:
+                    result_message = self.open_url(search_url)
+                    _log_interaction(
+                        action="type_text-search-url",
+                        query=query,
+                        candidates=[],
+                        chosen_summary="",
                         result=result_message,
                     )
                     return result_message
@@ -1402,6 +1403,27 @@ def _log_interaction(
 def _looks_like_search_intent(query: str) -> bool:
     cleaned = query.lower().strip()
     return bool(re.search(r"\b(поиск|search|найти)\b", cleaned))
+
+
+def _looks_like_web_search_request(query: str, text: Optional[str]) -> bool:
+    combined = f"{query} {text or ''}".lower()
+    markers = [
+        r"гугл",
+        r"google",
+        r"яндекс",
+        r"yandex",
+        r"в интернете",
+        r"в сети",
+        r"интернет",
+        r"веб",
+        r"web",
+        r"website",
+        r"нагугл",
+        r"найди сайт",
+        r"поиск сайта",
+        r"искать сайт",
+    ]
+    return any(re.search(pattern, combined) for pattern in markers)
 
 
 def _has_accessibility(page: Page) -> bool:
