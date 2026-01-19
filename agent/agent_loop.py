@@ -483,7 +483,6 @@ def _autonomous_browse(
     def _request_response(
         *,
         extra_input: Optional[List[Dict[str, Any]]] = None,
-        tool_outputs: Optional[List[Dict[str, str]]] = None,
     ):
         nonlocal response_id
         payload: Dict[str, Any] = {
@@ -491,14 +490,17 @@ def _autonomous_browse(
             "temperature": 0.1,
             "tools": tools_for_client,
         }
+
         if response_id:
             payload["previous_response_id"] = response_id
+
+        # В Responses API input — это список “items”.
+        # Мы всегда докидываем новые items через extra_input.
         if response_id is None:
             payload["input"] = base_messages + (extra_input or [])
-        elif extra_input:
-            payload["input"] = extra_input
-        if tool_outputs:
-            payload["tool_outputs"] = tool_outputs
+        else:
+            payload["input"] = extra_input or []
+
         response = client.responses.create(**payload)
         response_id = response.id
         return response
@@ -525,20 +527,41 @@ def _autonomous_browse(
 
     def _extract_tool_calls(response: Any) -> List[Dict[str, Any]]:
         output = getattr(response, "output", None) or []
-        tool_calls = []
+        tool_calls: List[Dict[str, Any]] = []
+
         for item in output:
+            # item может быть объектом или dict
             item_type = getattr(item, "type", None)
             if item_type is None and isinstance(item, dict):
                 item_type = item.get("type")
-            if item_type != "tool_call":
+
+            # Responses API чаще отдаёт function_call
+            if item_type not in ("tool_call", "function_call"):
                 continue
-            tool_calls.append(
-                {
-                    "id": getattr(item, "id", None) or item.get("id"),
-                    "name": getattr(item, "name", None) or item.get("name"),
-                    "arguments": getattr(item, "arguments", None) or item.get("arguments"),
-                }
-            )
+
+            # Достаём id
+            # В Responses API id вызова функции часто называется call_id
+            call_id = (
+    getattr(item, "call_id", None)
+    or (item.get("call_id") if isinstance(item, dict) else None)
+    or getattr(item, "id", None)
+    or (item.get("id") if isinstance(item, dict) else None)
+)
+
+            # Достаём name/arguments (они могут лежать по-разному)
+            name = getattr(item, "name", None) if not isinstance(item, dict) else item.get("name")
+            arguments = getattr(item, "arguments", None) if not isinstance(item, dict) else item.get("arguments")
+
+            # Иногда это вложено в item.function
+            fn = getattr(item, "function", None) if not isinstance(item, dict) else item.get("function")
+            if fn:
+                if not name:
+                    name = getattr(fn, "name", None) if not isinstance(fn, dict) else fn.get("name")
+                if arguments is None:
+                    arguments = getattr(fn, "arguments", None) if not isinstance(fn, dict) else fn.get("arguments")
+
+            tool_calls.append({"id": call_id, "name": name, "arguments": arguments})
+
         return tool_calls
 
     def _wait_for_dom(reason: str) -> None:
@@ -600,9 +623,9 @@ def _autonomous_browse(
                     _wait_for_dom("before read_view")
                 if call["name"] == "open_url":
                     result, missing_url_message = _safe_navigation(
-                    tool_client,
-                    args.get("url"),
-                )
+                        tool_client,
+                        args.get("url"),
+                    )
                     if missing_url_message:
                         return "needs_input", missing_url_message
                 else:
@@ -757,12 +780,20 @@ def _autonomous_browse(
                 )
                 no_progress_steps = 0
 
-            response = _request_response(
-                extra_input=pending_messages or None,
-                tool_outputs=tool_outputs,
+            # --- ВАЖНО: вернуть tool outputs модели в формате Responses API ---
+            function_output_items: List[Dict[str, Any]] = []
+            for out in tool_outputs:
+                function_output_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": out["tool_call_id"],   # ВАЖНО: call_id, не tool_call_id
+                    "output": out["output"],
+                }
             )
-            pending_messages = []
 
+            extra = function_output_items + (pending_messages or [])
+            response = _request_response(extra_input=extra)
+            pending_messages = []
             continue
 
         # Нет tool_calls — если инструментов ещё не было, пробуем перезапросить
