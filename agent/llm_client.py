@@ -7,7 +7,7 @@ from loguru import logger
 import httpx
 from openai import OpenAI
 
-from config.proxy import apply_requests_proxy, get_proxy_url
+from config.proxy import apply_requests_proxy, clear_requests_proxy, get_proxy_url
 
 # Загружаем .env
 load_dotenv()
@@ -17,30 +17,6 @@ _disabled_reason: Optional[str] = None
 _provider: Optional[str] = None
 _client_uses_proxy: Optional[bool] = None
 _http_client: Optional[httpx.Client] = None
-
-
-def _build_http_client(
-    *,
-    proxy_url: Optional[str],
-    force_no_proxy: bool,
-) -> Optional[httpx.Client]:
-    client_kwargs = {"trust_env": False, "timeout": httpx.Timeout(20.0)}
-
-    if force_no_proxy:
-        if "proxy" in inspect.signature(httpx.Client).parameters:
-            client_kwargs["proxy"] = None
-        else:
-            client_kwargs["proxies"] = None
-        return httpx.Client(**client_kwargs)
-
-    if proxy_url:
-        if "proxy" in inspect.signature(httpx.Client).parameters:
-            client_kwargs["proxy"] = proxy_url
-        else:
-            client_kwargs["proxies"] = {"http://": proxy_url, "https://": proxy_url}
-        return httpx.Client(**client_kwargs)
-
-    return None
 
 
 def disable_client(reason: str):
@@ -128,33 +104,28 @@ def get_client(force_no_proxy: bool = False) -> Optional[OpenAI]:
         logger.error(f"[llm_client] Unknown LLM_PROVIDER: {provider!r}")
         return None
 
+    # Настраиваем прокси для HTTP
+    if force_no_proxy:
+        clear_requests_proxy()
+    else:
+        apply_requests_proxy()
+
     try:
-        # Настраиваем прокси для HTTP
-        if force_no_proxy:
+        proxy_url = None if force_no_proxy else get_proxy_url()
+        if proxy_url:
             if _http_client:
                 _http_client.close()
-            _http_client = _build_http_client(
-                proxy_url=None,
-                force_no_proxy=True,
-            )
-            logger.info(
-                "[llm_client] Using local no-proxy HTTP client without changing global env."
-            )
-        else:
-            apply_requests_proxy()
-            proxy_url = get_proxy_url()
-            if proxy_url:
-                if _http_client:
-                    _http_client.close()
-                _http_client = _build_http_client(
-                    proxy_url=proxy_url,
-                    force_no_proxy=False,
-                )
-                logger.info(f"[llm_client] OpenAI client will use proxy: {proxy_url!r}")
+            client_kwargs = {"trust_env": False}
+            if "proxy" in inspect.signature(httpx.Client).parameters:
+                client_kwargs["proxy"] = proxy_url
             else:
-                if _http_client:
-                    _http_client.close()
-                _http_client = None
+                client_kwargs["proxies"] = proxy_url
+            _http_client = httpx.Client(**client_kwargs)
+            logger.info(f"[llm_client] OpenAI client will use proxy: {proxy_url!r}")
+        else:
+            if _http_client:
+                _http_client.close()
+            _http_client = None
         _client = OpenAI(api_key=api_key, base_url=base_url, http_client=_http_client)
         _provider = provider
         _client_uses_proxy = not force_no_proxy
