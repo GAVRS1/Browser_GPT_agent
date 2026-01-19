@@ -11,7 +11,7 @@ from config.proxy import (
     get_proxy_url,
     should_use_browser_proxy,
 )
-from config.sites import BROWSER_START_URL, SEARCH_URL_TEMPLATE
+from config.sites import BROWSER_START_URL, SEARCH_URL_MODE, SEARCH_URL_TEMPLATE
 
 # Глобальные объекты (единый браузер и контекст)
 _playwright: Optional[Playwright] = None
@@ -124,7 +124,8 @@ def get_page() -> Page:
     """
 
     context = get_context()
-    start_url = BROWSER_START_URL or SEARCH_URL_TEMPLATE
+    search_url_allowed = SEARCH_URL_MODE not in {"form", "field", "disabled", "off", "false"}
+    start_url = BROWSER_START_URL or (SEARCH_URL_TEMPLATE if search_url_allowed else None)
 
     if context.pages:
         page = context.pages[0]
