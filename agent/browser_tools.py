@@ -24,7 +24,7 @@ from agent.llm_client import get_client
 from agent.risk_guard import risky_keyword_matches
 from agent.tools_init import dom_snapshot
 from config import timeouts
-from config.sites import SEARCH_URL_TEMPLATE
+from config.sites import SEARCH_URL_MODE, SEARCH_URL_TEMPLATE
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -426,7 +426,11 @@ class BrowserToolbox:
 
         self._ensure_page_alive()
         page = self.page
-        summary: Dict[str, Any] = {"url": page.url, "title": safe_title(page)}
+        summary: Dict[str, Any] = {
+            "url": page.url,
+            "title": safe_title(page),
+            "has_accessibility": _has_accessibility(page),
+        }
         summary.update(_detect_login_state(page))
 
         # --- Базовый список интерактивных элементов (кнопки, ссылки и т.п.) ---
@@ -1399,21 +1403,15 @@ def _looks_like_search_intent(query: str) -> bool:
     cleaned = query.lower().strip()
     return bool(re.search(r"\b(поиск|search|найти)\b", cleaned))
 
+
+def _has_accessibility(page: Page) -> bool:
+    accessibility = getattr(page, "accessibility", None)
+    return bool(accessibility and hasattr(accessibility, "snapshot"))
+
+
 def _resolve_search_url_template() -> Optional[str]:
-    return SEARCH_URL_TEMPLATE
-
-
-def _build_search_url(query: str) -> Optional[str]:
-    template = _resolve_search_url_template()
-    if not template:
+    if SEARCH_URL_MODE in {"form", "field", "disabled", "off", "false"}:
         return None
-    encoded_query = quote_plus(query)
-    if "{query}" in template:
-        return template.replace("{query}", encoded_query)
-    return f"{template}{encoded_query}"
-
-
-def _resolve_search_url_template() -> Optional[str]:
     return SEARCH_URL_TEMPLATE
 
 
