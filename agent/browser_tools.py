@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from loguru import logger
-from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import (
+    ElementHandle,
+    Locator,
+    Page,
+    TimeoutError as PlaywrightTimeoutError,
+)
 
 from browser.context import get_page
 from agent.llm_client import get_client
@@ -984,10 +989,74 @@ class BrowserToolbox:
             locator.wait_for(state="attached", timeout=timeouts.locator_attach_timeout_ms())
             locator.scroll_into_view_if_needed(timeout=timeouts.locator_scroll_timeout_ms())
 
-        locator.click(timeout=timeouts.locator_click_timeout_ms(), force=True)
-        locator.fill(text, timeout=timeouts.locator_fill_timeout_ms())
+        try:
+            locator.click(timeout=timeouts.locator_click_timeout_ms(), force=True)
+            locator.fill(text, timeout=timeouts.locator_fill_timeout_ms())
+            if press_enter:
+                locator.press("Enter")
+            return
+        except Exception as exc:  # noqa: BLE001
+            fallback = self._find_editable_handle(locator)
+            if fallback is None:
+                raise
+            logger.debug(f"[tools] Retrying fill on nearby editable node: {exc}")
+            self._fill_element_handle(fallback, text, press_enter)
+
+    def _find_editable_handle(self, locator: Locator) -> Optional[ElementHandle]:
+        try:
+            handle = locator.first.evaluate_handle(
+                """
+                el => {
+                  const isEditable = node => !!node && (
+                    node.matches(
+                      'input, textarea, select, [contenteditable=\"\"], [contenteditable=\"true\"], ' +
+                      '[role=\"textbox\"], [role=\"combobox\"], [role=\"searchbox\"]'
+                    )
+                  );
+                  if (isEditable(el)) return el;
+
+                  const label = el.closest('label');
+                  if (label) {
+                    const target = label.querySelector(
+                      'input, textarea, select, [contenteditable=\"\"], [contenteditable=\"true\"], ' +
+                      '[role=\"textbox\"], [role=\"combobox\"], [role=\"searchbox\"]'
+                    );
+                    if (target) return target;
+                  }
+
+                  let parent = el.parentElement;
+                  while (parent) {
+                    const target = parent.querySelector(
+                      'input, textarea, select, [contenteditable=\"\"], [contenteditable=\"true\"], ' +
+                      '[role=\"textbox\"], [role=\"combobox\"], [role=\"searchbox\"]'
+                    );
+                    if (target) return target;
+                    parent = parent.parentElement;
+                  }
+
+                  const forId = el.getAttribute('for');
+                  if (forId) {
+                    const byId = document.getElementById(forId);
+                    if (byId) return byId;
+                  }
+
+                  return null;
+                }
+                """
+            )
+        except Exception:  # noqa: BLE001
+            return None
+
+        element = handle.as_element() if handle else None
+        return element
+
+    def _fill_element_handle(self, handle: ElementHandle, text: str, press_enter: bool) -> None:
+        with contextlib.suppress(Exception):
+            handle.scroll_into_view_if_needed(timeout=timeouts.locator_scroll_timeout_ms())
+        handle.click(timeout=timeouts.locator_click_timeout_ms(), force=True)
+        handle.fill(text, timeout=timeouts.locator_fill_timeout_ms())
         if press_enter:
-            locator.press("Enter")
+            handle.press("Enter")
 
     def scroll(self, direction: str = "down", amount: int = 800) -> str:
         """
@@ -1410,8 +1479,21 @@ def _filter_a11y_node(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _safe_accessibility_tree(page: Page, max_nodes: int = 120) -> Dict[str, Any]:
+    accessibility = getattr(page, "accessibility", None)
+    if accessibility is None or not hasattr(accessibility, "snapshot"):
+        logger.warning(
+            "[tools] Accessibility snapshot unavailable: Playwright page has no accessibility API"
+        )
+        return {
+            "error": "accessibility_unavailable",
+            "hint": (
+                "Playwright version does not expose page.accessibility. "
+                "Reinstall/upgrade Playwright >= 1.17 and ensure it is used at runtime."
+            ),
+        }
+
     try:
-        snapshot = page.accessibility.snapshot(interesting_only=False)
+        snapshot = accessibility.snapshot(interesting_only=False)
     except Exception as exc:  # noqa: BLE001
         logger.error(f"[tools] Accessibility snapshot failed: {exc}")
         return {"error": str(exc)}

@@ -2,6 +2,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import playwright
 from loguru import logger
 from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
 
@@ -83,6 +84,7 @@ def get_context() -> BrowserContext:
         return _context
 
     logger.info("Starting Playwright and launching persistent Chromium context...")
+    logger.info(f"[browser] Playwright version: {playwright.__version__}")
 
     # Проксирование HTTP-запросов для LLM / API
     apply_requests_proxy()
