@@ -43,6 +43,16 @@ def pick_subagent(goal: str) -> Optional[BaseSubAgent]:
     """
 
     lowered = goal.lower()
+    food_keywords = (
+        "лавка",
+        "еда",
+        "бургер",
+        "доставка",
+        "продукты",
+    )
+    if any(keyword in lowered for keyword in food_keywords):
+        logger.info("[subagents] Skipping subagent routing for food/lavka запрос")
+        return None
     for subagent in _SUBAGENTS:
         try:
             if subagent.matches(lowered):

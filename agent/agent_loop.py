@@ -530,7 +530,6 @@ def _autonomous_browse(
         tool_calls: List[Dict[str, Any]] = []
 
         for item in output:
-            # item может быть объектом или dict
             item_type = getattr(item, "type", None)
             if item_type is None and isinstance(item, dict):
                 item_type = item.get("type")
@@ -539,59 +538,43 @@ def _autonomous_browse(
             if item_type not in ("tool_call", "function_call"):
                 continue
 
-            # Достаём id
-            # В Responses API id вызова функции часто называется call_id
-            call_id = (
-                getattr(item, "call_id", None)
-                or (item.get("call_id") if isinstance(item, dict) else None)
-                or getattr(item, "id", None)
-                or (item.get("id") if isinstance(item, dict) else None)
-                or getattr(item, "tool_call_id", None)
-                or (item.get("tool_call_id") if isinstance(item, dict) else None)
-            )
+            # ✅ КРИТИЧНО:
+            # для item.type == "function_call" используем ТОЛЬКО call_id (вида "call_...")
+            if item_type == "function_call":
+                call_id = (
+                    getattr(item, "call_id", None)
+                    or (item.get("call_id") if isinstance(item, dict) else None)
+                )
+            else:
+                # legacy tool_call может использовать id
+                call_id = (
+                    getattr(item, "id", None)
+                    or (item.get("id") if isinstance(item, dict) else None)
+                    or getattr(item, "tool_call_id", None)
+                    or (item.get("tool_call_id") if isinstance(item, dict) else None)
+                )
 
-            # Достаём name/arguments (они могут лежать по-разному)
             name = getattr(item, "name", None) if not isinstance(item, dict) else item.get("name")
             arguments = getattr(item, "arguments", None) if not isinstance(item, dict) else item.get("arguments")
 
-            # Иногда это вложено в item.function или item.tool_call
             fn = getattr(item, "function", None) if not isinstance(item, dict) else item.get("function")
             if fn:
                 if not name:
                     name = getattr(fn, "name", None) if not isinstance(fn, dict) else fn.get("name")
                 if arguments is None:
                     arguments = getattr(fn, "arguments", None) if not isinstance(fn, dict) else fn.get("arguments")
-                if not call_id:
+                if not call_id and item_type == "function_call":
                     call_id = (
                         getattr(fn, "call_id", None)
                         or (fn.get("call_id") if isinstance(fn, dict) else None)
-                        or getattr(fn, "id", None)
-                        or (fn.get("id") if isinstance(fn, dict) else None)
                     )
 
-            tool_call = getattr(item, "tool_call", None) if not isinstance(item, dict) else item.get("tool_call")
-            if tool_call:
-                if not name:
-                    name = (
-                        getattr(tool_call, "name", None)
-                        if not isinstance(tool_call, dict)
-                        else tool_call.get("name")
-                    )
-                if arguments is None:
-                    arguments = (
-                        getattr(tool_call, "arguments", None)
-                        if not isinstance(tool_call, dict)
-                        else tool_call.get("arguments")
-                    )
-                if not call_id:
-                    call_id = (
-                        getattr(tool_call, "call_id", None)
-                        or (tool_call.get("call_id") if isinstance(tool_call, dict) else None)
-                        or getattr(tool_call, "id", None)
-                        or (tool_call.get("id") if isinstance(tool_call, dict) else None)
-                    )
+            if not call_id:
+                raise RuntimeError(f"Tool call without call_id/id: {item}")
 
-            tool_calls.append({"id": call_id, "name": name, "arguments": arguments})
+            tool_calls.append(
+                {"call_id": call_id, "name": name, "arguments": arguments, "type": item_type}
+            )
 
         return tool_calls
 
@@ -620,6 +603,7 @@ def _autonomous_browse(
 
         message_text = _extract_response_text(response)
         tool_calls = _extract_tool_calls(response)
+        logger.info(f"[agent] extracted tool_calls: {tool_calls}")
 
         # Вариант A: печатаем мысли агента на каждом шаге
         if message_text:
@@ -644,7 +628,7 @@ def _autonomous_browse(
                 if skip_remaining_calls:
                     tool_outputs.append(
                         {
-                            "tool_call_id": call["id"],
+                            "call_id": call["call_id"],
                             "output": (
                                 "skipped_tool_call: skipped due to loop guard; "
                                 "choose a different action."
@@ -741,10 +725,10 @@ def _autonomous_browse(
                     step_made_progress = True
                     last_observation = result.observation
 
-                # ВСЕГДА отправляем ответ инструмента для этого tool_call_id
+                # ВСЕГДА отправляем ответ инструмента для этого call_id
                 tool_outputs.append(
                     {
-                        "tool_call_id": call["id"],
+                        "call_id": call["call_id"],
                         "output": result.observation,
                     }
                 )
@@ -830,11 +814,12 @@ def _autonomous_browse(
                 function_output_items.append(
                     {
                         "type": "function_call_output",
-                        "call_id": out["tool_call_id"],  # ВАЖНО: call_id, не tool_call_id
+                        "call_id": out["call_id"],
                         "output": out["output"],
                     }
                 )
 
+            logger.info(f"[agent] sending function_call_output items: {function_output_items}")
             extra = function_output_items + (pending_messages or [])
             response = _request_response(extra_input=extra)
             pending_messages = []
