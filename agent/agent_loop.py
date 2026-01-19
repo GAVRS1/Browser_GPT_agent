@@ -435,6 +435,7 @@ def _autonomous_browse(
     no_progress_steps = 0              # шаги подряд без изменения наблюдения
     last_observation = observation     # последнее observation, чтобы сравнивать
     waited_for_dom = False
+    no_tool_calls = 0
 
     if DEBUG_THOUGHTS:
         print("\n=== Старт автономного режима ===")
@@ -579,6 +580,7 @@ def _autonomous_browse(
                     print(step_status(step_idx))
 
         if tool_calls:
+            no_tool_calls = 0
             step_made_progress = False
             waited_for_dom = False
             tool_outputs: List[Dict[str, str]] = []
@@ -762,6 +764,29 @@ def _autonomous_browse(
             pending_messages = []
 
             continue
+
+        # Нет tool_calls — если инструментов ещё не было, пробуем перезапросить
+        if not actions:
+            no_tool_calls += 1
+            if no_tool_calls < 2:
+                pending_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты не вызвал ни одного инструмента, поэтому браузер не был "
+                            "управляем. Обязательно используй инструменты (read_view, open_url, "
+                            "click, type_text и т.д.) и продолжай выполнение."
+                        ),
+                    }
+                )
+                continue
+            msg = (
+                "LLM не запросил ни одного инструмента, поэтому браузер не был "
+                "управляем. Проверь доступность инструментов и повтори задачу."
+            )
+            if DEBUG_THOUGHTS:
+                print("⚠ " + msg)
+            return "failed", msg
 
         # Нет tool_calls — считаем, что это финальный ответ
         final_text = message_text or ""
