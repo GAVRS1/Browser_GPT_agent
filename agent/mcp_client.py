@@ -81,11 +81,14 @@ class MCPToolClient:
         await self._ready_future
 
     def close(self) -> None:
-        if self._serve_task is None:
-            return
-        self._run(self._disconnect())
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join(timeout=2)
+        try:
+            if self._serve_task is not None:
+                self._run(self._disconnect())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[mcp] Failed to close client cleanly: {exc}")
+        finally:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(timeout=2)
 
     async def _disconnect(self) -> None:
         if self._shutdown_event is not None:
