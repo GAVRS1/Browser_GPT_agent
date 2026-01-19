@@ -56,6 +56,7 @@ def _launch_context(playwright: Playwright, use_proxy: bool) -> BrowserContext:
             "--disable-infobars",
             "--no-first-run",
             "--no-default-browser-check",
+            "--force-renderer-accessibility",
         ],
     )
 
