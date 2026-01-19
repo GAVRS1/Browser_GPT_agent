@@ -554,13 +554,42 @@ def _autonomous_browse(
             name = getattr(item, "name", None) if not isinstance(item, dict) else item.get("name")
             arguments = getattr(item, "arguments", None) if not isinstance(item, dict) else item.get("arguments")
 
-            # Иногда это вложено в item.function
+            # Иногда это вложено в item.function или item.tool_call
             fn = getattr(item, "function", None) if not isinstance(item, dict) else item.get("function")
             if fn:
                 if not name:
                     name = getattr(fn, "name", None) if not isinstance(fn, dict) else fn.get("name")
                 if arguments is None:
                     arguments = getattr(fn, "arguments", None) if not isinstance(fn, dict) else fn.get("arguments")
+                if not call_id:
+                    call_id = (
+                        getattr(fn, "call_id", None)
+                        or (fn.get("call_id") if isinstance(fn, dict) else None)
+                        or getattr(fn, "id", None)
+                        or (fn.get("id") if isinstance(fn, dict) else None)
+                    )
+
+            tool_call = getattr(item, "tool_call", None) if not isinstance(item, dict) else item.get("tool_call")
+            if tool_call:
+                if not name:
+                    name = (
+                        getattr(tool_call, "name", None)
+                        if not isinstance(tool_call, dict)
+                        else tool_call.get("name")
+                    )
+                if arguments is None:
+                    arguments = (
+                        getattr(tool_call, "arguments", None)
+                        if not isinstance(tool_call, dict)
+                        else tool_call.get("arguments")
+                    )
+                if not call_id:
+                    call_id = (
+                        getattr(tool_call, "call_id", None)
+                        or (tool_call.get("call_id") if isinstance(tool_call, dict) else None)
+                        or getattr(tool_call, "id", None)
+                        or (tool_call.get("id") if isinstance(tool_call, dict) else None)
+                    )
 
             tool_calls.append({"id": call_id, "name": name, "arguments": arguments})
 
