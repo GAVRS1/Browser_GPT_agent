@@ -34,11 +34,9 @@ class ToolClient:
             tools.append(
                 {
                     "type": "function",
-                    "function": {
-                        "name": schema.name,
-                        "description": schema.description,
-                        "parameters": schema.parameters,
-                    },
+                    "name": schema.name,
+                    "description": schema.description,
+                    "parameters": schema.parameters,
                 }
             )
         return tools
