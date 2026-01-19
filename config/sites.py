@@ -23,7 +23,7 @@ def _read_env(parser: Callable[[str], T], env_name: str, default: T) -> T:
 
 # Common / generic
 BROWSER_START_URL: Optional[str] = os.getenv("BROWSER_START_URL")
-GOOGLE_SEARCH_URL_TEMPLATE: Optional[str] = os.getenv("GOOGLE_SEARCH_URL_TEMPLATE")
+SEARCH_URL_TEMPLATE: Optional[str] = os.getenv("SEARCH_URL_TEMPLATE")
 
 # Время ожидания подтверждения рискованных действий.
 # Не привязываемся к сайтам, чтобы архитектура оставалась универсальной.

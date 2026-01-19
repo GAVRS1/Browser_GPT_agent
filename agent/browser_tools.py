@@ -6,7 +6,7 @@ import base64
 import re
 import textwrap
 from collections import deque
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -24,6 +24,7 @@ from agent.llm_client import get_client
 from agent.risk_guard import risky_keyword_matches
 from agent.tools_init import dom_snapshot
 from config import timeouts
+from config.sites import SEARCH_URL_TEMPLATE
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -737,6 +738,18 @@ class BrowserToolbox:
         page = self.page
 
         if _looks_like_search_intent(query):
+            search_url = _build_search_url(text) if text else None
+            if search_url:
+                result_message = self.open_url(search_url)
+                _log_interaction(
+                    action="type_text-search-url",
+                    query=query,
+                    candidates=[],
+                    chosen_summary="",
+                    result=result_message,
+                )
+                return result_message
+
             direct_locator = _first_visible(
                 _search_locators(page, query, include_text_inputs=True),
                 allow_hidden_fallback=True,
@@ -1385,6 +1398,20 @@ def _log_interaction(
 def _looks_like_search_intent(query: str) -> bool:
     cleaned = query.lower().strip()
     return bool(re.search(r"\b(поиск|search|найти)\b", cleaned))
+
+
+def _resolve_search_url_template() -> Optional[str]:
+    return SEARCH_URL_TEMPLATE
+
+
+def _build_search_url(query: str) -> Optional[str]:
+    template = _resolve_search_url_template()
+    if not template:
+        return None
+    encoded_query = quote_plus(query)
+    if "{query}" in template:
+        return template.replace("{query}", encoded_query)
+    return f"{template}{encoded_query}"
 
 
 def _first_visible(
