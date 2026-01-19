@@ -10,6 +10,7 @@ from config.proxy import (
     get_proxy_url,
     should_use_browser_proxy,
 )
+from config.sites import BROWSER_START_URL, GOOGLE_SEARCH_URL_TEMPLATE
 
 # Глобальные объекты (единый браузер и контекст)
 _playwright: Optional[Playwright] = None
@@ -121,6 +122,7 @@ def get_page() -> Page:
     """
 
     context = get_context()
+    start_url = BROWSER_START_URL or GOOGLE_SEARCH_URL_TEMPLATE
 
     if context.pages:
         page = context.pages[0]
@@ -128,6 +130,15 @@ def get_page() -> Page:
     else:
         logger.debug("No pages found, creating a new one...")
         page = context.new_page()
+
+    if page.url == "about:blank":
+        if start_url:
+            if "{query}" in start_url:
+                start_url = start_url.replace("{query}", "")
+            logger.debug("Empty tab detected, navigating to start URL.")
+            page.goto(start_url)
+        else:
+            logger.debug("Empty tab detected, but no start URL configured.")
 
     return page
 
