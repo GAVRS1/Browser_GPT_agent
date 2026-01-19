@@ -50,7 +50,9 @@ class MCPToolClient:
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         self._session: Optional[ClientSession] = None
-        self._stdio_ctx = None
+        self._serve_task: Optional[asyncio.Task] = None
+        self._shutdown_event: Optional[asyncio.Event] = None
+        self._ready_future: Optional[asyncio.Future] = None
         self._tools_cache: Optional[List[Dict[str, Any]]] = None
 
     def _run_loop(self) -> None:
@@ -67,35 +69,74 @@ class MCPToolClient:
         self._run(self._connect())
 
     async def _connect(self) -> None:
-        command = os.getenv("MCP_SERVER_COMMAND", sys.executable).strip() or sys.executable
-        raw_args = os.getenv("MCP_SERVER_ARGS", "-m agent.mcp_server")
-        args = shlex.split(raw_args)
-        env = os.environ.copy()
-
-        server_params = StdioServerParameters(command=command, args=args, env=env)
-        self._stdio_ctx = stdio_client(server_params)
-        read, write = await self._stdio_ctx.__aenter__()
-        self._session = ClientSession(read, write)
-        await self._session.__aenter__()
-        await self._session.initialize()
-        logger.info("[mcp] Client session initialized.")
+        if self._serve_task is not None and not self._serve_task.done():
+            if self._ready_future is not None:
+                await self._ready_future
+            return
+        self._ready_future = self._loop.create_future()
+        self._shutdown_event = asyncio.Event()
+        self._serve_task = asyncio.create_task(
+            self._serve(self._ready_future, self._shutdown_event)
+        )
+        self._serve_task.add_done_callback(self._handle_serve_task_done)
+        await self._ready_future
 
     def close(self) -> None:
-        if self._session is None:
+        if self._serve_task is None:
             return
         self._run(self._disconnect())
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=2)
 
     async def _disconnect(self) -> None:
-        if self._session is not None:
-            await self._session.__aexit__(None, None, None)
-            self._session = None
-        if self._stdio_ctx is not None:
-            await self._stdio_ctx.__aexit__(None, None, None)
-            self._stdio_ctx = None
+        if self._shutdown_event is not None:
+            self._shutdown_event.set()
+        if self._serve_task is not None:
+            try:
+                await self._serve_task
+            except Exception:
+                logger.exception("[mcp] Serve task failed during shutdown.")
+        self._serve_task = None
+        self._shutdown_event = None
+        self._ready_future = None
         self._tools_cache = None
         logger.info("[mcp] Client session closed.")
+
+    async def _serve(
+        self, ready_future: asyncio.Future, shutdown_event: asyncio.Event
+    ) -> None:
+        command = os.getenv("MCP_SERVER_COMMAND", sys.executable).strip() or sys.executable
+        raw_args = os.getenv("MCP_SERVER_ARGS", "-m agent.mcp_server")
+        args = shlex.split(raw_args)
+        env = os.environ.copy()
+
+        server_params = StdioServerParameters(command=command, args=args, env=env)
+        try:
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    self._session = session
+                    await session.initialize()
+                    logger.info("[mcp] Client session initialized.")
+                    if not ready_future.done():
+                        ready_future.set_result(None)
+                    await shutdown_event.wait()
+        except Exception as exc:
+            if not ready_future.done():
+                ready_future.set_exception(exc)
+            raise
+        finally:
+            self._session = None
+            self._tools_cache = None
+
+    def _handle_serve_task_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            logger.info("[mcp] Serve task cancelled.")
+            return
+        exception = task.exception()
+        if exception is not None:
+            logger.exception(
+                "[mcp] Serve task exited with error.", exc_info=exception
+            )
 
     def list_tools(self) -> List[Dict[str, Any]]:
         self.start()
