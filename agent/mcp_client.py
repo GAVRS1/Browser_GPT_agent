@@ -55,7 +55,7 @@ def _iter_exceptions(exc: BaseException) -> Iterable[BaseException]:
 
 def format_exception_details(exc: BaseException) -> str:
     items = list(_iter_exceptions(exc))
-    if len(items) <= 1:
+    if not items or (len(items) == 1 and items[0] is exc):
         return str(exc)
     details = "; ".join(f"{type(item).__name__}: {item}" for item in items)
     return f"{exc} | Sub-exceptions: {details}"
