@@ -1,0 +1,7 @@
+playwright>=1.47.0
+python-dotenv>=1.0.1
+loguru>=0.7.2
+openai>=1.0.0
+mcp>=1.0.0
+sse-starlette>=3.2.0
+ramdriver>=0.28rc1
