@@ -2,7 +2,9 @@ import sys
 
 from loguru import logger
 from agent.agent_loop import enable_console_confirmation, agent_is_busy, run_agent
+from agent.mcp_client import MCPToolClient
 from agent.tools_init import register_all_tools
+from browser.context import get_page
 
 _NOISY_MODULES = {"config.proxy", "agent.llm_client", "agent.agent_loop"}
 
@@ -25,9 +27,40 @@ register_all_tools()
 enable_console_confirmation()
 
 
+def _initialize_environment() -> bool:
+    logger.info("Проверка браузера и MCP инструментов...")
+
+    try:
+        page = get_page()
+        if page is None:
+            raise RuntimeError("Page was not created")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"[main] Не удалось открыть браузер: {exc}")
+        print("Не удалось открыть браузер / инструменты недоступны.")
+        return False
+
+    mcp_client = MCPToolClient()
+    try:
+        mcp_client.list_tools()
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"[main] MCP инструменты недоступны: {exc}")
+        print("Не удалось открыть браузер / инструменты недоступны.")
+        return False
+    finally:
+        try:
+            mcp_client.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[main] Не удалось закрыть MCP клиент: {exc}")
+
+    return True
+
+
 def main():
     logger.info("=== Browser AI Agent (Console Mode) ===")
     logger.info("Браузер запускается...")
+
+    if not _initialize_environment():
+        return
 
     print("\nВведите задачу для агента.")
 
