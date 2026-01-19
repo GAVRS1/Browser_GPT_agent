@@ -5,7 +5,6 @@ import json
 import base64
 import re
 import textwrap
-from collections import deque
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +21,6 @@ from playwright.sync_api import (
 from browser.context import get_page
 from agent.llm_client import get_client
 from agent.risk_guard import risky_keyword_matches
-from agent.tools_init import dom_snapshot
 from config import timeouts
 from config.sites import SEARCH_URL_MODE, SEARCH_URL_TEMPLATE
 
@@ -244,22 +242,6 @@ class BrowserToolbox:
                     },
                 },
             ),
-            ToolSchema(
-                name="snapshot_accessibility",
-                description=(
-                    "Получить dom snapshot и компактное дерево доступности для анализа a11y рядом с DOM."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "max_nodes": {
-                            "type": "integer",
-                            "description": "Лимит узлов в accessibility tree для ответа (по умолчанию 120).",
-                            "default": 120,
-                        }
-                    },
-                },
-            ),
         ]
 
 
@@ -311,12 +293,6 @@ class BrowserToolbox:
                     tool_name,
                     True,
                     self.take_screenshot(bool(arguments.get("full_page", False))),
-                )
-            if tool_name == "snapshot_accessibility":
-                return ToolResult(
-                    tool_name,
-                    True,
-                    self.snapshot_accessibility(int(arguments.get("max_nodes", 120))),
                 )
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[tools] {tool_name} failed: {exc}")
@@ -402,16 +378,6 @@ class BrowserToolbox:
             # Пробрасываем наверх, чтобы execute() пометил инструмент как fail
             raise
 
-    def snapshot_accessibility(self, max_nodes: int = 120) -> str:
-        """Возвращает dom snapshot и уменьшенный accessibility tree."""
-
-        self._ensure_page_alive()
-        page = self.page
-
-        dom = dom_snapshot(max_text=5000, max_items=60)
-        a11y_tree = _safe_accessibility_tree(page, max_nodes=max_nodes)
-        payload = {"dom_snapshot": dom, "accessibility_tree": a11y_tree}
-        return json.dumps(payload, ensure_ascii=False)[:2400]
     def read_view(self) -> str:
         """Возвращает компактный обзор страницы.
 
@@ -1512,82 +1478,6 @@ def _extract_search_tokens_from_url(url: str) -> list[str]:
         seen.add(tok)
         unique_tokens.append(tok)
     return unique_tokens
-
-
-def _filter_a11y_node(raw: Dict[str, Any]) -> Dict[str, Any]:
-    allowed_keys = {
-        "role",
-        "name",
-        "value",
-        "description",
-        "checked",
-        "expanded",
-        "disabled",
-        "focused",
-        "pressed",
-        "selected",
-        "level",
-        "multiline",
-        "placeholder",
-        "readonly",
-        "required",
-        "roledescription",
-        "autocomplete",
-    }
-    filtered = {k: v for k, v in raw.items() if k in allowed_keys and v not in (None, "")}
-    return filtered
-
-
-def _safe_accessibility_tree(page: Page, max_nodes: int = 120) -> Dict[str, Any]:
-    accessibility = getattr(page, "accessibility", None)
-    if accessibility is None or not hasattr(accessibility, "snapshot"):
-        logger.warning(
-            "[tools] Accessibility snapshot unavailable: Playwright page has no accessibility API"
-        )
-        return {
-            "error": "accessibility_unavailable",
-            "hint": (
-                "Playwright version does not expose page.accessibility. "
-                "Reinstall/upgrade Playwright >= 1.17 and ensure it is used at runtime."
-            ),
-        }
-
-    try:
-        snapshot = accessibility.snapshot(interesting_only=False)
-    except Exception as exc:  # noqa: BLE001
-        logger.error(f"[tools] Accessibility snapshot failed: {exc}")
-        return {"error": str(exc)}
-
-    if not snapshot:
-        return {}
-
-    queue: deque[tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = deque()
-    queue.append((snapshot, None))
-    root_copy: Optional[Dict[str, Any]] = None
-    produced = 0
-    last_copied: Optional[Dict[str, Any]] = None
-
-    while queue and produced < max_nodes:
-        node, parent_copy = queue.popleft()
-        filtered = _filter_a11y_node(node)
-        produced += 1
-        last_copied = filtered
-
-        if parent_copy is None:
-            root_copy = filtered
-        else:
-            parent_copy.setdefault("children", []).append(filtered)
-
-        children = node.get("children") or []
-        for child in children:
-            if produced + len(queue) >= max_nodes:
-                break
-            queue.append((child, filtered))
-
-    if queue and last_copied is not None:
-        last_copied["truncated"] = True
-
-    return root_copy or {}
 
 
 def _collect_search_tokens(page: Page) -> list[str]:
