@@ -1399,6 +1399,19 @@ def _looks_like_search_intent(query: str) -> bool:
     cleaned = query.lower().strip()
     return bool(re.search(r"\b(поиск|search|найти)\b", cleaned))
 
+def _resolve_search_url_template() -> Optional[str]:
+    return SEARCH_URL_TEMPLATE
+
+
+def _build_search_url(query: str) -> Optional[str]:
+    template = _resolve_search_url_template()
+    if not template:
+        return None
+    encoded_query = quote_plus(query)
+    if "{query}" in template:
+        return template.replace("{query}", encoded_query)
+    return f"{template}{encoded_query}"
+
 
 def _resolve_search_url_template() -> Optional[str]:
     return SEARCH_URL_TEMPLATE
