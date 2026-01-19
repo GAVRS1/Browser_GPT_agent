@@ -44,6 +44,23 @@ def _parse_payload(text: str) -> Tuple[bool, str]:
     return success, str(observation)
 
 
+def _iter_exceptions(exc: BaseException) -> Iterable[BaseException]:
+    nested = getattr(exc, "exceptions", None)
+    if nested:
+        for item in nested:
+            yield from _iter_exceptions(item)
+    else:
+        yield exc
+
+
+def format_exception_details(exc: BaseException) -> str:
+    items = list(_iter_exceptions(exc))
+    if len(items) <= 1:
+        return str(exc)
+    details = "; ".join(f"{type(item).__name__}: {item}" for item in items)
+    return f"{exc} | Sub-exceptions: {details}"
+
+
 class MCPToolClient:
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -120,6 +137,7 @@ class MCPToolClient:
                         ready_future.set_result(None)
                     await shutdown_event.wait()
         except Exception as exc:
+            logger.error(f"[mcp] Client session failed: {format_exception_details(exc)}")
             if not ready_future.done():
                 ready_future.set_exception(exc)
             raise

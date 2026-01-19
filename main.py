@@ -2,7 +2,7 @@ import sys
 
 from loguru import logger
 from agent.agent_loop import enable_console_confirmation, agent_is_busy, run_agent
-from agent.mcp_client import MCPToolClient
+from agent.mcp_client import MCPToolClient, format_exception_details
 from agent.tools_init import register_all_tools
 from browser.context import get_page
 
@@ -43,7 +43,10 @@ def _initialize_environment() -> bool:
     try:
         mcp_client.list_tools()
     except Exception as exc:  # noqa: BLE001
-        logger.error(f"[main] MCP инструменты недоступны: {exc}")
+        logger.error(
+            "[main] MCP инструменты недоступны: "
+            f"{format_exception_details(exc)}"
+        )
         print("Не удалось открыть браузер / инструменты недоступны.")
         return False
     finally:
