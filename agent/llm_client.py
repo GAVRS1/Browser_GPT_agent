@@ -114,7 +114,9 @@ def get_client(force_no_proxy: bool = False) -> Optional[OpenAI]:
 
     if provider in ("gpt", "openai"):
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+        base_url = (
+            os.getenv("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"
+        )
         if not api_key:
             logger.error("[llm_client] OPENAI_API_KEY is not set!")
             return None
