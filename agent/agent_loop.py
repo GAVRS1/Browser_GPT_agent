@@ -10,7 +10,7 @@ from loguru import logger
 
 from agent.browser_tools import ToolResult, format_tool_observation
 from agent.llm_client import get_client, get_model_id
-from agent.mcp_client import get_shared_mcp_client
+from agent.tool_client import ToolClient, get_shared_tool_client
 from agent.risk_guard import is_risky_text
 from agent.subagents import pick_subagent
 from browser.context import shutdown_browser
@@ -377,7 +377,7 @@ def _parse_needs_input(observation: str) -> Dict[str, Any]:
 
 
 def _safe_navigation(
-    mcp_client: MCPToolClient,
+    tool_client: ToolClient,
     url: Optional[str],
 ) -> tuple[Optional[ToolResult], Optional[str]]:
     if not url:
@@ -389,7 +389,7 @@ def _safe_navigation(
             "Стартовый URL не задан. Пожалуйста, укажите стартовую страницу в запросе."
             + fallback_hint,
         )
-    call_result = mcp_client.call_tool("open_url", {"url": url})
+    call_result = tool_client.call_tool("open_url", {"url": url})
     return ToolResult("open_url", call_result.success, call_result.observation), None
 
 
@@ -404,9 +404,9 @@ def _autonomous_browse(
     if client is None:
         return "failed", "LLM недоступен — не могу управлять браузером"
 
-    mcp_client = get_shared_mcp_client()
-    tools_for_client = mcp_client.openai_tools()
-    observation_result = mcp_client.call_tool("read_view", {})
+    tool_client = get_shared_tool_client()
+    tools_for_client = tool_client.openai_tools()
+    observation_result = tool_client.call_tool("read_view", {})
     observation = observation_result.observation
     login_state = _parse_needs_login(observation)
     if login_state.get("needs_login"):
@@ -542,7 +542,7 @@ def _autonomous_browse(
 
     def _wait_for_dom(reason: str) -> None:
         nonlocal waited_for_dom
-        wait_call = mcp_client.call_tool("wait_for_dom_stable", {})
+        wait_call = tool_client.call_tool("wait_for_dom_stable", {})
         wait_result = ToolResult("wait_for_dom_stable", wait_call.success, wait_call.observation)
         actions.append(f"{wait_result.name}: {'ok' if wait_result.success else 'fail'}")
         actions.append(format_tool_observation(wait_result))
@@ -598,13 +598,13 @@ def _autonomous_browse(
                     _wait_for_dom("before read_view")
                 if call["name"] == "open_url":
                     result, missing_url_message = _safe_navigation(
-                        mcp_client,
-                        args.get("url"),
-                    )
+                    tool_client,
+                    args.get("url"),
+                )
                     if missing_url_message:
                         return "needs_input", missing_url_message
                 else:
-                    call_result = mcp_client.call_tool(call["name"], args)
+                    call_result = tool_client.call_tool(call["name"], args)
                     result = ToolResult(
                         call["name"],
                         call_result.success,
@@ -620,7 +620,7 @@ def _autonomous_browse(
                     if approved:
                         retry_args = dict(args)
                         retry_args["_confirmed"] = True
-                        retry_result = mcp_client.call_tool(call["name"], retry_args)
+                        retry_result = tool_client.call_tool(call["name"], retry_args)
                         result = ToolResult(call["name"], retry_result.success, retry_result.observation)
 
                 # Краткая строка результата
@@ -739,7 +739,7 @@ def _autonomous_browse(
                     }
                 )
                 _wait_for_dom("no progress")
-                refreshed_call = mcp_client.call_tool("read_view", {})
+                refreshed_call = tool_client.call_tool("read_view", {})
                 refreshed_view = refreshed_call.observation
                 actions.append("read_view: ok")
                 actions.append(f"read_view: {refreshed_view}")

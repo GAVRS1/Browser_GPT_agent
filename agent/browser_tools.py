@@ -35,28 +35,12 @@ class ToolResult:
 
 @dataclass
 class ToolSchema:
-    """Описание инструмента в формате MCP с конвертацией в OpenAI."""
+    """Описание инструмента с конвертацией в формат tool-схем."""
 
     name: str
     description: str
     parameters: Dict[str, Any]
 
-    def as_openai(self) -> Dict[str, Any]:
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
-            },
-        }
-
-    def as_mcp(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.parameters,
-        }
 
 
 @dataclass
@@ -272,11 +256,6 @@ class BrowserToolbox:
             ),
         ]
 
-    def openai_tools(self) -> List[Dict[str, Any]]:
-        return [schema.as_openai() for schema in self.tool_schemas()]
-
-    def mcp_tools(self) -> List[Dict[str, Any]]:
-        return [schema.as_mcp() for schema in self.tool_schemas()]
 
     # ------------------------------------------------------------
     # Execution helpers

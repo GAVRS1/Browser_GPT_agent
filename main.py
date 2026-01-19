@@ -2,10 +2,9 @@ import sys
 
 from loguru import logger
 from agent.agent_loop import enable_console_confirmation, agent_is_busy, run_agent
-from agent.mcp_client import (
-    close_shared_mcp_client,
-    format_exception_details,
-    get_shared_mcp_client,
+from agent.tool_client import (
+    close_shared_tool_client,
+    get_shared_tool_client,
 )
 from agent.tools_init import register_all_tools
 from browser.context import get_page
@@ -32,7 +31,7 @@ enable_console_confirmation()
 
 
 def _initialize_environment() -> bool:
-    logger.info("Проверка браузера и MCP инструментов...")
+    logger.info("Проверка браузера и инструментов...")
 
     try:
         page = get_page()
@@ -43,14 +42,11 @@ def _initialize_environment() -> bool:
         print("Не удалось открыть браузер / инструменты недоступны.")
         return False
 
-    mcp_client = get_shared_mcp_client()
+    tool_client = get_shared_tool_client()
     try:
-        mcp_client.list_tools()
+        tool_client.list_tools()
     except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "[main] MCP инструменты недоступны: "
-            f"{format_exception_details(exc)}"
-        )
+        logger.error(f"[main] Инструменты недоступны: {exc}")
         print("Не удалось открыть браузер / инструменты недоступны.")
         return False
 
@@ -90,7 +86,7 @@ def main():
                 logger.error(f"[main] Ошибка агента: {exc}")
                 print("Ошибка выполнения задачи.")
     finally:
-        close_shared_mcp_client()
+        close_shared_tool_client()
         print("\nЗавершение работы агента.")
 
 
