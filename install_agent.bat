@@ -11,10 +11,6 @@ echo Installing agent requirements...
 pip install -r requirements-agent.txt
 
 echo.
-echo ==== Installing Playwright Python package (agent) ====
-pip install playwright
-
-echo.
 echo ==== Installing Playwright Chromium (agent) ====
 playwright install chromium
 
