@@ -32,7 +32,7 @@ from config.prompt_templates import (
     compose_prompt,
 )
 from config.proxy import get_proxy_url
-from config.sites import AGENT_CONFIRMATION_TIMEOUT, GOOGLE_SEARCH_URL_TEMPLATE
+from config.sites import AGENT_CONFIRMATION_TIMEOUT, SEARCH_URL_TEMPLATE
 
 
 @dataclass
@@ -382,8 +382,8 @@ def _safe_navigation(
 ) -> tuple[Optional[ToolResult], Optional[str]]:
     if not url:
         fallback_hint = ""
-        if not GOOGLE_SEARCH_URL_TEMPLATE:
-            fallback_hint = " Задайте GOOGLE_SEARCH_URL_TEMPLATE в .env."
+        if not SEARCH_URL_TEMPLATE:
+            fallback_hint = " Задайте SEARCH_URL_TEMPLATE в .env."
         return (
             None,
             "Стартовый URL не задан. Пожалуйста, укажите стартовую страницу в запросе."
