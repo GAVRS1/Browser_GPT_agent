@@ -10,7 +10,7 @@ from loguru import logger
 
 from agent.browser_tools import ToolResult, format_tool_observation
 from agent.llm_client import get_client, get_model_id
-from agent.mcp_client import MCPToolClient
+from agent.mcp_client import get_shared_mcp_client
 from agent.risk_guard import is_risky_text
 from agent.subagents import pick_subagent
 from browser.context import shutdown_browser
@@ -404,392 +404,389 @@ def _autonomous_browse(
     if client is None:
         return "failed", "LLM недоступен — не могу управлять браузером"
 
-    mcp_client = MCPToolClient()
-    try:
-        tools_for_client = mcp_client.openai_tools()
-        observation_result = mcp_client.call_tool("read_view", {})
-        observation = observation_result.observation
-        login_state = _parse_needs_login(observation)
-        if login_state.get("needs_login"):
-            indicators = ", ".join(login_state.get("login_indicators", [])) or "unknown"
-            return (
-                "needs_input",
-                "Обнаружена страница входа (признаки: "
-                f"{indicators}). Пожалуйста, войдите вручную в браузере, "
-                "затем повторно запустите задачу — агент продолжит с текущей сессией.",
-            )
-        manual_state = _parse_needs_input(observation)
-        if manual_state.get("needs_input"):
-            indicators = ", ".join(manual_state.get("manual_input_indicators", [])) or "unknown"
-            return (
-                "needs_input",
-                "Обнаружен запрос на CAPTCHA/2FA/оплату (признаки: "
-                f"{indicators}). Пожалуйста, выполните требуемое действие вручную "
-                "в браузере, затем повторно запустите задачу — агент продолжит "
-                "с текущей сессией.",
-            )
-        screenshot_cache = ScreenshotCache()
-        actions: List[str] = []
-    
-        # АНТИ-ЗАЦИКЛИВАНИЕ
-        recent_signatures: List[str] = []  # история последних действий (имя + аргументы)
-        no_progress_steps = 0              # шаги подряд без изменения наблюдения
-        last_observation = observation     # последнее observation, чтобы сравнивать
-        waited_for_dom = False
-    
-        if DEBUG_THOUGHTS:
-            print("\n=== Старт автономного режима ===")
-            print(f"Цель пользователя: {goal}")
-            if plan_text:
-                print("\nКраткий план (из планировщика):")
-                print(plan_text.strip())
-            print("\nТекущее краткое наблюдение за страницей:")
-            print(observation)
-            print("=================================\n")
-        else:
-            print(action_status("Автономный режим", "старт"))
-    
-        system_prompt = compose_prompt(
-            BROWSER_CONTEXT,
-            SESSION_RULES,
-            "Общие правила:\n" + BROWSER_ACTION_RULES,
-            "Информация о карточках и слотах:\n"
-            "- В наблюдении может быть поле 'product_cards' — список крупных карточек предложений.\n"
-            "- Для каждой карточки там есть как минимум 'text'; используй его, чтобы выбрать подходящий слот/услугу.\n"
-            "- Если пользователь просит конкретное время, стоимость или параметры, опирайся на содержимое этих карточек.",
-            RENTAL_FLOWS,
-            SAFETY_LIMITS,
-            SCREENSHOT_GUIDE,
-            FINAL_REPORT,
+    mcp_client = get_shared_mcp_client()
+    tools_for_client = mcp_client.openai_tools()
+    observation_result = mcp_client.call_tool("read_view", {})
+    observation = observation_result.observation
+    login_state = _parse_needs_login(observation)
+    if login_state.get("needs_login"):
+        indicators = ", ".join(login_state.get("login_indicators", [])) or "unknown"
+        return (
+            "needs_input",
+            "Обнаружена страница входа (признаки: "
+            f"{indicators}). Пожалуйста, войдите вручную в браузере, "
+            "затем повторно запустите задачу — агент продолжит с текущей сессией.",
         )
-    
-        user_parts: List[str] = []
-        if prev_context:
-            user_parts.append("Контекст предыдущих действий агента в браузере:\n" + prev_context)
-        user_parts.append(f"Текущая цель пользователя: {goal}")
-        user_parts.append(f"Твой внутренний план: {plan_text or '—'}")
-        user_parts.append(f"Текущая страница в браузере (краткое наблюдение): {observation}")
-        user_content = "\n\n".join(user_parts)
-    
-        base_messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
-    
-        pending_messages: List[Dict[str, Any]] = []
-        response_id: Optional[str] = None
-        model_id = get_model_id(client)
-    
-        def _request_response(
-            *,
-            extra_input: Optional[List[Dict[str, Any]]] = None,
-            tool_outputs: Optional[List[Dict[str, str]]] = None,
-        ):
-            nonlocal response_id
-            payload: Dict[str, Any] = {
-                "model": model_id,
-                "temperature": 0.1,
-                "tools": tools_for_client,
-            }
-            if response_id:
-                payload["previous_response_id"] = response_id
-            if response_id is None:
-                payload["input"] = base_messages + (extra_input or [])
-            elif extra_input:
-                payload["input"] = extra_input
-            if tool_outputs:
-                payload["tool_outputs"] = tool_outputs
-            response = client.responses.create(**payload)
-            response_id = response.id
-            return response
-    
-        def _extract_response_text(response: Any) -> str:
-            text = getattr(response, "output_text", None)
-            if text:
-                return text.strip()
-            output = getattr(response, "output", None) or []
-            for item in output:
-                item_type = getattr(item, "type", None)
-                if item_type is None and isinstance(item, dict):
-                    item_type = item.get("type")
-                if item_type == "message":
-                    content = getattr(item, "content", None) or item.get("content", [])
-                    for block in content:
-                        if isinstance(block, dict):
-                            if block.get("type") == "text":
-                                return str(block.get("text", "")).strip()
-                        else:
-                            if getattr(block, "type", None) == "text":
-                                return str(getattr(block, "text", "")).strip()
-            return ""
-    
-        def _extract_tool_calls(response: Any) -> List[Dict[str, Any]]:
-            output = getattr(response, "output", None) or []
-            tool_calls = []
-            for item in output:
-                item_type = getattr(item, "type", None)
-                if item_type is None and isinstance(item, dict):
-                    item_type = item.get("type")
-                if item_type != "tool_call":
-                    continue
-                tool_calls.append(
-                    {
-                        "id": getattr(item, "id", None) or item.get("id"),
-                        "name": getattr(item, "name", None) or item.get("name"),
-                        "arguments": getattr(item, "arguments", None) or item.get("arguments"),
-                    }
-                )
-            return tool_calls
-    
-        def _wait_for_dom(reason: str) -> None:
-            nonlocal waited_for_dom
-            wait_call = mcp_client.call_tool("wait_for_dom_stable", {})
-            wait_result = ToolResult("wait_for_dom_stable", wait_call.success, wait_call.observation)
-            actions.append(f"{wait_result.name}: {'ok' if wait_result.success else 'fail'}")
-            actions.append(format_tool_observation(wait_result))
-            pending_messages.append(
+    manual_state = _parse_needs_input(observation)
+    if manual_state.get("needs_input"):
+        indicators = ", ".join(manual_state.get("manual_input_indicators", [])) or "unknown"
+        return (
+            "needs_input",
+            "Обнаружен запрос на CAPTCHA/2FA/оплату (признаки: "
+            f"{indicators}). Пожалуйста, выполните требуемое действие вручную "
+            "в браузере, затем повторно запустите задачу — агент продолжит "
+            "с текущей сессией.",
+        )
+    screenshot_cache = ScreenshotCache()
+    actions: List[str] = []
+
+    # АНТИ-ЗАЦИКЛИВАНИЕ
+    recent_signatures: List[str] = []  # история последних действий (имя + аргументы)
+    no_progress_steps = 0              # шаги подряд без изменения наблюдения
+    last_observation = observation     # последнее observation, чтобы сравнивать
+    waited_for_dom = False
+
+    if DEBUG_THOUGHTS:
+        print("\n=== Старт автономного режима ===")
+        print(f"Цель пользователя: {goal}")
+        if plan_text:
+            print("\nКраткий план (из планировщика):")
+            print(plan_text.strip())
+        print("\nТекущее краткое наблюдение за страницей:")
+        print(observation)
+        print("=================================\n")
+    else:
+        print(action_status("Автономный режим", "старт"))
+
+    system_prompt = compose_prompt(
+        BROWSER_CONTEXT,
+        SESSION_RULES,
+        "Общие правила:\n" + BROWSER_ACTION_RULES,
+        "Информация о карточках и слотах:\n"
+        "- В наблюдении может быть поле 'product_cards' — список крупных карточек предложений.\n"
+        "- Для каждой карточки там есть как минимум 'text'; используй его, чтобы выбрать подходящий слот/услугу.\n"
+        "- Если пользователь просит конкретное время, стоимость или параметры, опирайся на содержимое этих карточек.",
+        RENTAL_FLOWS,
+        SAFETY_LIMITS,
+        SCREENSHOT_GUIDE,
+        FINAL_REPORT,
+    )
+
+    user_parts: List[str] = []
+    if prev_context:
+        user_parts.append("Контекст предыдущих действий агента в браузере:\n" + prev_context)
+    user_parts.append(f"Текущая цель пользователя: {goal}")
+    user_parts.append(f"Твой внутренний план: {plan_text or '—'}")
+    user_parts.append(f"Текущая страница в браузере (краткое наблюдение): {observation}")
+    user_content = "\n\n".join(user_parts)
+
+    base_messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+
+    pending_messages: List[Dict[str, Any]] = []
+    response_id: Optional[str] = None
+    model_id = get_model_id(client)
+
+    def _request_response(
+        *,
+        extra_input: Optional[List[Dict[str, Any]]] = None,
+        tool_outputs: Optional[List[Dict[str, str]]] = None,
+    ):
+        nonlocal response_id
+        payload: Dict[str, Any] = {
+            "model": model_id,
+            "temperature": 0.1,
+            "tools": tools_for_client,
+        }
+        if response_id:
+            payload["previous_response_id"] = response_id
+        if response_id is None:
+            payload["input"] = base_messages + (extra_input or [])
+        elif extra_input:
+            payload["input"] = extra_input
+        if tool_outputs:
+            payload["tool_outputs"] = tool_outputs
+        response = client.responses.create(**payload)
+        response_id = response.id
+        return response
+
+    def _extract_response_text(response: Any) -> str:
+        text = getattr(response, "output_text", None)
+        if text:
+            return text.strip()
+        output = getattr(response, "output", None) or []
+        for item in output:
+            item_type = getattr(item, "type", None)
+            if item_type is None and isinstance(item, dict):
+                item_type = item.get("type")
+            if item_type == "message":
+                content = getattr(item, "content", None) or item.get("content", [])
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            return str(block.get("text", "")).strip()
+                    else:
+                        if getattr(block, "type", None) == "text":
+                            return str(getattr(block, "text", "")).strip()
+        return ""
+
+    def _extract_tool_calls(response: Any) -> List[Dict[str, Any]]:
+        output = getattr(response, "output", None) or []
+        tool_calls = []
+        for item in output:
+            item_type = getattr(item, "type", None)
+            if item_type is None and isinstance(item, dict):
+                item_type = item.get("type")
+            if item_type != "tool_call":
+                continue
+            tool_calls.append(
                 {
-                    "role": "system",
-                    "content": f"wait_for_dom_stable ({reason}): {wait_result.observation}",
+                    "id": getattr(item, "id", None) or item.get("id"),
+                    "name": getattr(item, "name", None) or item.get("name"),
+                    "arguments": getattr(item, "arguments", None) or item.get("arguments"),
                 }
             )
-            waited_for_dom = True
-    
-        # Лимит шагов, чтобы не крутиться бесконечно
-        for step_idx in range(30):
-            reminder = screenshot_cache.reminder_message()
-            if reminder:
-                pending_messages.append(reminder)
-    
-            response = _request_response(extra_input=pending_messages)
-            pending_messages = []
-    
-            message_text = _extract_response_text(response)
-            tool_calls = _extract_tool_calls(response)
-    
-            # Вариант A: печатаем мысли агента на каждом шаге
-            if message_text:
-                thought = message_text.strip()
-                if thought:
-                    logger.info(f"[agent] LLM thought (step {step_idx}): {thought}")
-                    if DEBUG_THOUGHTS:
-                        print("\n🤖 Мысли агента (шаг):")
-                        print(thought)
-                        print()
-                    else:
-                        print(step_status(step_idx))
-    
-            if tool_calls:
-                step_made_progress = False
-                waited_for_dom = False
-                tool_outputs: List[Dict[str, str]] = []
-    
-                for call in tool_calls:
-                    # Подпись действия для детектора циклов
-                    sig = f"{call['name']}:{call['arguments']}"
-                    recent_signatures.append(sig)
-                    recent_signatures = recent_signatures[-6:]
-    
-                    # Логирование использования инструмента
-                    logger.info(f"[agent] Using tool: {call['name']} args={call['arguments']}")
-    
-                    # ВЫПОЛНЯЕМ инструмент до использования result
-                    args = json.loads(call["arguments"] or "{}")
-                    if call["name"] == "read_view" and not waited_for_dom:
-                        _wait_for_dom("before read_view")
-                    if call["name"] == "open_url":
-                        result, missing_url_message = _safe_navigation(
-                            mcp_client,
-                            args.get("url"),
-                        )
-                        if missing_url_message:
-                            return "needs_input", missing_url_message
-                    else:
-                        call_result = mcp_client.call_tool(call["name"], args)
-                        result = ToolResult(
-                            call["name"],
-                            call_result.success,
-                            call_result.observation,
-                        )
-                    if isinstance(result.observation, str) and result.observation.startswith(
-                        "needs_confirmation:"
-                    ):
-                        approved = _await_confirmation()
-                        actions.append(
-                            f"confirmation: {'approved' if approved else 'denied'}"
-                        )
-                        if approved:
-                            retry_args = dict(args)
-                            retry_args["_confirmed"] = True
-                            retry_result = mcp_client.call_tool(call["name"], retry_args)
-                            result = ToolResult(call["name"], retry_result.success, retry_result.observation)
-    
-                    # Краткая строка результата
-                    short_line = f"{result.name}: {'ok' if result.success else 'fail'}"
-                    actions.append(short_line)
-    
-                    formatted = format_tool_observation(result)
-                    actions.append(formatted)
-    
-                    if result.name == "take_screenshot" and result.success:
-                        screenshot_cache.remember(result.observation)
-                        actions.append(f"last_screenshot_cached: {screenshot_cache.last_link}")
-                    if result.name == "open_url":
-                        _wait_for_dom("after open_url")
-                    if result.name == "read_view":
-                        login_state = _parse_needs_login(result.observation)
-                        if login_state.get("needs_login"):
-                            indicators = ", ".join(
-                                login_state.get("login_indicators", [])
-                            ) or "unknown"
-                            return (
-                                "needs_input",
-                                "Обнаружена страница входа (признаки: "
-                                f"{indicators}). Пожалуйста, войдите вручную в браузере, "
-                                "затем повторно запустите задачу — агент продолжит "
-                                "с текущей сессией.",
-                            )
-                        manual_state = _parse_needs_input(result.observation)
-                        if manual_state.get("needs_input"):
-                            indicators = ", ".join(
-                                manual_state.get("manual_input_indicators", [])
-                            ) or "unknown"
-                            return (
-                                "needs_input",
-                                "Обнаружен запрос на CAPTCHA/2FA/оплату (признаки: "
-                                f"{indicators}). Пожалуйста, выполните требуемое действие "
-                                "вручную в браузере, затем повторно запустите задачу — агент "
-                                "продолжит с текущей сессией.",
-                            )
-    
-                    if DEBUG_THOUGHTS:
-                        print(f"🛠 {short_line}")
-                        print(f"   Аргументы: {call['arguments']}")
-                    else:
-                        print(tool_status(result.name, result.success))
-    
-                    # Проверяем, изменилось ли наблюдение (DOM / состояние)
-                    if result.observation and result.observation != last_observation:
-                        step_made_progress = True
-                        last_observation = result.observation
-    
-                    # ВСЕГДА отправляем ответ инструмента для этого tool_call_id
-                    tool_outputs.append(
-                        {
-                            "tool_call_id": call["id"],
-                            "output": result.observation,
-                        }
-                    )
-    
-                    # --- детектор зацикливания по одинаковому инструменту ---
-                    if len(recent_signatures) >= 3 and len(set(recent_signatures[-3:])) == 1:
-                        msg = (
-                            "Агент три раза подряд выполнил одно и то же действие. "
-                            "Скорее всего, он застрял и нужно сменить стратегию."
-                        )
-                        if DEBUG_THOUGHTS:
-                            print("⚠ " + msg)
-    
-                        # Добавляем системную подсказку в историю, чтобы модель перестала
-                        # повторять одно и то же действие и попробовала другой инструмент.
-                        pending_messages.append(
-                            {
-                                "role": "system",
-                                "content": (
-                                    "Ты три шага подряд вызвал один и тот же инструмент "
-                                    "с одинаковыми аргументами. Перестань повторять его; "
-                                    "попробуй другой инструмент или другие аргументы. "
-                                    "Если ты уже ввёл текст в строку поиска, не вводи его снова, "
-                                    "а проанализируй текущую страницу, кликни по подходящему элементу, "
-                                    "выбери карточку товара, прокрути страницу и т.п."
-                                ),
-                            }
-                        )
-    
-                        # Сбрасываем счётчики зацикливания и выходим из цикла по tool_calls.
-                        no_progress_steps = 0
-                        recent_signatures.clear()
-                        step_made_progress = False
-                        break
-    
-                if step_made_progress:
-                    no_progress_steps = 0
+        return tool_calls
+
+    def _wait_for_dom(reason: str) -> None:
+        nonlocal waited_for_dom
+        wait_call = mcp_client.call_tool("wait_for_dom_stable", {})
+        wait_result = ToolResult("wait_for_dom_stable", wait_call.success, wait_call.observation)
+        actions.append(f"{wait_result.name}: {'ok' if wait_result.success else 'fail'}")
+        actions.append(format_tool_observation(wait_result))
+        pending_messages.append(
+            {
+                "role": "system",
+                "content": f"wait_for_dom_stable ({reason}): {wait_result.observation}",
+            }
+        )
+        waited_for_dom = True
+
+    # Лимит шагов, чтобы не крутиться бесконечно
+    for step_idx in range(30):
+        reminder = screenshot_cache.reminder_message()
+        if reminder:
+            pending_messages.append(reminder)
+
+        response = _request_response(extra_input=pending_messages)
+        pending_messages = []
+
+        message_text = _extract_response_text(response)
+        tool_calls = _extract_tool_calls(response)
+
+        # Вариант A: печатаем мысли агента на каждом шаге
+        if message_text:
+            thought = message_text.strip()
+            if thought:
+                logger.info(f"[agent] LLM thought (step {step_idx}): {thought}")
+                if DEBUG_THOUGHTS:
+                    print("\n🤖 Мысли агента (шаг):")
+                    print(thought)
+                    print()
                 else:
-                    no_progress_steps += 1
-    
-                if no_progress_steps >= 3:
+                    print(step_status(step_idx))
+
+        if tool_calls:
+            step_made_progress = False
+            waited_for_dom = False
+            tool_outputs: List[Dict[str, str]] = []
+
+            for call in tool_calls:
+                # Подпись действия для детектора циклов
+                sig = f"{call['name']}:{call['arguments']}"
+                recent_signatures.append(sig)
+                recent_signatures = recent_signatures[-6:]
+
+                # Логирование использования инструмента
+                logger.info(f"[agent] Using tool: {call['name']} args={call['arguments']}")
+
+                # ВЫПОЛНЯЕМ инструмент до использования result
+                args = json.loads(call["arguments"] or "{}")
+                if call["name"] == "read_view" and not waited_for_dom:
+                    _wait_for_dom("before read_view")
+                if call["name"] == "open_url":
+                    result, missing_url_message = _safe_navigation(
+                        mcp_client,
+                        args.get("url"),
+                    )
+                    if missing_url_message:
+                        return "needs_input", missing_url_message
+                else:
+                    call_result = mcp_client.call_tool(call["name"], args)
+                    result = ToolResult(
+                        call["name"],
+                        call_result.success,
+                        call_result.observation,
+                    )
+                if isinstance(result.observation, str) and result.observation.startswith(
+                    "needs_confirmation:"
+                ):
+                    approved = _await_confirmation()
+                    actions.append(
+                        f"confirmation: {'approved' if approved else 'denied'}"
+                    )
+                    if approved:
+                        retry_args = dict(args)
+                        retry_args["_confirmed"] = True
+                        retry_result = mcp_client.call_tool(call["name"], retry_args)
+                        result = ToolResult(call["name"], retry_result.success, retry_result.observation)
+
+                # Краткая строка результата
+                short_line = f"{result.name}: {'ok' if result.success else 'fail'}"
+                actions.append(short_line)
+
+                formatted = format_tool_observation(result)
+                actions.append(formatted)
+
+                if result.name == "take_screenshot" and result.success:
+                    screenshot_cache.remember(result.observation)
+                    actions.append(f"last_screenshot_cached: {screenshot_cache.last_link}")
+                if result.name == "open_url":
+                    _wait_for_dom("after open_url")
+                if result.name == "read_view":
+                    login_state = _parse_needs_login(result.observation)
+                    if login_state.get("needs_login"):
+                        indicators = ", ".join(
+                            login_state.get("login_indicators", [])
+                        ) or "unknown"
+                        return (
+                            "needs_input",
+                            "Обнаружена страница входа (признаки: "
+                            f"{indicators}). Пожалуйста, войдите вручную в браузере, "
+                            "затем повторно запустите задачу — агент продолжит "
+                            "с текущей сессией.",
+                        )
+                    manual_state = _parse_needs_input(result.observation)
+                    if manual_state.get("needs_input"):
+                        indicators = ", ".join(
+                            manual_state.get("manual_input_indicators", [])
+                        ) or "unknown"
+                        return (
+                            "needs_input",
+                            "Обнаружен запрос на CAPTCHA/2FA/оплату (признаки: "
+                            f"{indicators}). Пожалуйста, выполните требуемое действие "
+                            "вручную в браузере, затем повторно запустите задачу — агент "
+                            "продолжит с текущей сессией.",
+                        )
+
+                if DEBUG_THOUGHTS:
+                    print(f"🛠 {short_line}")
+                    print(f"   Аргументы: {call['arguments']}")
+                else:
+                    print(tool_status(result.name, result.success))
+
+                # Проверяем, изменилось ли наблюдение (DOM / состояние)
+                if result.observation and result.observation != last_observation:
+                    step_made_progress = True
+                    last_observation = result.observation
+
+                # ВСЕГДА отправляем ответ инструмента для этого tool_call_id
+                tool_outputs.append(
+                    {
+                        "tool_call_id": call["id"],
+                        "output": result.observation,
+                    }
+                )
+
+                # --- детектор зацикливания по одинаковому инструменту ---
+                if len(recent_signatures) >= 3 and len(set(recent_signatures[-3:])) == 1:
                     msg = (
-                        "Несколько действий подряд не привели к заметным изменениям на странице. "
-                        "Ранее агент останавливался, чтобы не зациклиться, но теперь он "
-                        "пытается сменить стратегию и продолжить работу."
+                        "Агент три раза подряд выполнил одно и то же действие. "
+                        "Скорее всего, он застрял и нужно сменить стратегию."
                     )
                     if DEBUG_THOUGHTS:
                         print("⚠ " + msg)
-    
-                    # Вместо немедленного завершения добавляем системную подсказку модели:
+
+                    # Добавляем системную подсказку в историю, чтобы модель перестала
+                    # повторять одно и то же действие и попробовала другой инструмент.
                     pending_messages.append(
                         {
                             "role": "system",
                             "content": (
-                                "Ты сделал несколько шагов подряд, которые не привели к изменениям "
-                                "на странице. Не повторяй те же действия. Проанализируй текущее "
-                                "наблюдение и попробуй другой инструмент или последовательность: "
-                                "например, клик по другому элементу, прокрутку страницы, переход "
-                                "к карточке товара и т.п."
+                                "Ты три шага подряд вызвал один и тот же инструмент "
+                                "с одинаковыми аргументами. Перестань повторять его; "
+                                "попробуй другой инструмент или другие аргументы. "
+                                "Если ты уже ввёл текст в строку поиска, не вводи его снова, "
+                                "а проанализируй текущую страницу, кликни по подходящему элементу, "
+                                "выбери карточку товара, прокрути страницу и т.п."
                             ),
                         }
                     )
-                    _wait_for_dom("no progress")
-                    refreshed_call = mcp_client.call_tool("read_view", {})
-                    refreshed_view = refreshed_call.observation
-                    actions.append("read_view: ok")
-                    actions.append(f"read_view: {refreshed_view}")
-                    last_observation = refreshed_view
-                    pending_messages.append(
-                        {
-                            "role": "system",
-                            "content": (
-                                "Обновлённое наблюдение после ожидания динамического контента: "
-                                f"{refreshed_view}"
-                            ),
-                        }
-                    )
+
+                    # Сбрасываем счётчики зацикливания и выходим из цикла по tool_calls.
                     no_progress_steps = 0
-    
-                response = _request_response(
-                    extra_input=pending_messages or None,
-                    tool_outputs=tool_outputs,
-                )
-                pending_messages = []
-    
-                continue
-    
-            # Нет tool_calls — считаем, что это финальный ответ
-            final_text = message_text or ""
-            summary = "\n".join(actions[-8:])
-            report_parts = [
-                "Автономный отчёт:",
-                summary or "(действия не требовались)",
-                "",
-                final_text,
-            ]
-            full_report = "\n".join([part for part in report_parts if part])
-    
-            if DEBUG_THOUGHTS:
-                print("\n✅ Финальный ответ агента:")
-                print(final_text)
-                print()
+                    recent_signatures.clear()
+                    step_made_progress = False
+                    break
+
+            if step_made_progress:
+                no_progress_steps = 0
             else:
-                print(action_status("Ответ", "получен"))
-    
-            return "completed", full_report
-    
-        msg = "Автономный режим завершился без финального ответа после 30 шагов"
+                no_progress_steps += 1
+
+            if no_progress_steps >= 3:
+                msg = (
+                    "Несколько действий подряд не привели к заметным изменениям на странице. "
+                    "Ранее агент останавливался, чтобы не зациклиться, но теперь он "
+                    "пытается сменить стратегию и продолжить работу."
+                )
+                if DEBUG_THOUGHTS:
+                    print("⚠ " + msg)
+
+                # Вместо немедленного завершения добавляем системную подсказку модели:
+                pending_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты сделал несколько шагов подряд, которые не привели к изменениям "
+                            "на странице. Не повторяй те же действия. Проанализируй текущее "
+                            "наблюдение и попробуй другой инструмент или последовательность: "
+                            "например, клик по другому элементу, прокрутку страницы, переход "
+                            "к карточке товара и т.п."
+                        ),
+                    }
+                )
+                _wait_for_dom("no progress")
+                refreshed_call = mcp_client.call_tool("read_view", {})
+                refreshed_view = refreshed_call.observation
+                actions.append("read_view: ok")
+                actions.append(f"read_view: {refreshed_view}")
+                last_observation = refreshed_view
+                pending_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Обновлённое наблюдение после ожидания динамического контента: "
+                            f"{refreshed_view}"
+                        ),
+                    }
+                )
+                no_progress_steps = 0
+
+            response = _request_response(
+                extra_input=pending_messages or None,
+                tool_outputs=tool_outputs,
+            )
+            pending_messages = []
+
+            continue
+
+        # Нет tool_calls — считаем, что это финальный ответ
+        final_text = message_text or ""
+        summary = "\n".join(actions[-8:])
+        report_parts = [
+            "Автономный отчёт:",
+            summary or "(действия не требовались)",
+            "",
+            final_text,
+        ]
+        full_report = "\n".join([part for part in report_parts if part])
+
         if DEBUG_THOUGHTS:
-            print("⚠ " + msg)
-        return "failed", msg
-    finally:
-        mcp_client.close()
+            print("\n✅ Финальный ответ агента:")
+            print(final_text)
+            print()
+        else:
+            print(action_status("Ответ", "получен"))
+
+        return "completed", full_report
+
+    msg = "Автономный режим завершился без финального ответа после 30 шагов"
+    if DEBUG_THOUGHTS:
+        print("⚠ " + msg)
+    return "failed", msg
 
 def run_agent(goal: str) -> None:
     """
