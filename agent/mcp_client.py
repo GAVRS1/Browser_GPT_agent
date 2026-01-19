@@ -149,34 +149,65 @@ class MCPToolClient:
         self.start()
         if self._tools_cache is not None:
             return list(self._tools_cache)
-        tools = self._run(self._session.list_tools())
-        normalized = []
-        for tool in tools:
+
+        tools_result = self._run(self._session.list_tools())
+
+        # MCP SDK обычно возвращает объект с .tools
+        tools_iter = getattr(tools_result, "tools", tools_result)
+
+        normalized: List[Dict[str, Any]] = []
+        for tool in (tools_iter or []):
             if isinstance(tool, dict):
-                normalized.append(tool)
-            else:
-                normalized.append(
-                    {
-                        "name": getattr(tool, "name", ""),
-                        "description": getattr(tool, "description", ""),
-                        "input_schema": getattr(tool, "input_schema", {}),
-                    }
+                name = (tool.get("name") or "").strip()
+                description = tool.get("description") or ""
+                input_schema = (
+                    tool.get("input_schema")
+                    or tool.get("inputSchema")
+                    or tool.get("parameters")
+                    or {}
                 )
+            else:
+                name = (getattr(tool, "name", "") or "").strip()
+                description = getattr(tool, "description", "") or ""
+                input_schema = (
+                    getattr(tool, "input_schema", None)
+                    or getattr(tool, "inputSchema", None)
+                    or getattr(tool, "parameters", None)
+                    or {}
+                )
+
+            # Критично: пропускаем инструменты без имени
+            if not name:
+                logger.warning(f"[mcp] Skipping tool with empty name: {tool!r}")
+                continue
+
+            normalized.append(
+                {"name": name, "description": description, "input_schema": input_schema}
+            )
+
         self._tools_cache = normalized
         return list(normalized)
 
     def openai_tools(self) -> List[Dict[str, Any]]:
         tools = self.list_tools()
-        return [
-            {
-                "type": "function",
-                "name": tool["name"],
-                "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {}),
-            }
-            for tool in tools
-        ]
+        out: List[Dict[str, Any]] = []
 
+        for tool in tools:
+            name = (tool.get("name") or "").strip()
+            if not name:
+                continue
+
+            out.append(
+                {
+                    "type": "function",
+                    "name": name,  # <-- ВАЖНО: name на верхнем уровне (Responses API)
+                    "description": tool.get("description", "") or "",
+                    "parameters": tool.get("input_schema", {}) or {},
+                }
+            )
+
+        return out
+    
     def call_tool(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> MCPToolCallResult:
         self.start()
         args = arguments or {}
