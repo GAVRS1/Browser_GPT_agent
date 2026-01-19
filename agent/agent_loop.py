@@ -345,7 +345,7 @@ def _run_llm_planning(goal: str) -> str:
             print(content.strip())
             print("-------------------\n")
         else:
-            print(plan_status(content))
+            print(action_status("План", "готов"))
 
     return content or ""
 

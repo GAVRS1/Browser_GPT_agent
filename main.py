@@ -1,6 +1,24 @@
+import sys
+
 from loguru import logger
 from agent.agent_loop import enable_console_confirmation, agent_is_busy, run_agent
 from agent.tools_init import register_all_tools
+
+_NOISY_MODULES = {"config.proxy", "agent.llm_client", "agent.agent_loop"}
+
+
+def _configure_logging() -> None:
+    logger.remove()
+
+    def _console_filter(record) -> bool:
+        if record["level"].no < logger.level("WARNING").no:
+            return record["name"] not in _NOISY_MODULES
+        return True
+
+    logger.add(sys.stderr, level="INFO", filter=_console_filter)
+
+
+_configure_logging()
 
 # Инициализация инструментов
 register_all_tools()
