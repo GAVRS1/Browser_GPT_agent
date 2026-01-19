@@ -542,11 +542,13 @@ def _autonomous_browse(
             # Достаём id
             # В Responses API id вызова функции часто называется call_id
             call_id = (
-    getattr(item, "call_id", None)
-    or (item.get("call_id") if isinstance(item, dict) else None)
-    or getattr(item, "id", None)
-    or (item.get("id") if isinstance(item, dict) else None)
-)
+                getattr(item, "call_id", None)
+                or (item.get("call_id") if isinstance(item, dict) else None)
+                or getattr(item, "id", None)
+                or (item.get("id") if isinstance(item, dict) else None)
+                or getattr(item, "tool_call_id", None)
+                or (item.get("tool_call_id") if isinstance(item, dict) else None)
+            )
 
             # Достаём name/arguments (они могут лежать по-разному)
             name = getattr(item, "name", None) if not isinstance(item, dict) else item.get("name")
@@ -607,8 +609,21 @@ def _autonomous_browse(
             step_made_progress = False
             waited_for_dom = False
             tool_outputs: List[Dict[str, str]] = []
+            skip_remaining_calls = False
 
             for call in tool_calls:
+                if skip_remaining_calls:
+                    tool_outputs.append(
+                        {
+                            "tool_call_id": call["id"],
+                            "output": (
+                                "skipped_tool_call: skipped due to loop guard; "
+                                "choose a different action."
+                            ),
+                        }
+                    )
+                    continue
+
                 # Подпись действия для детектора циклов
                 sig = f"{call['name']}:{call['arguments']}"
                 recent_signatures.append(sig)
@@ -730,11 +745,11 @@ def _autonomous_browse(
                         }
                     )
 
-                    # Сбрасываем счётчики зацикливания и выходим из цикла по tool_calls.
+                    # Сбрасываем счётчики зацикливания и помечаем оставшиеся вызовы как пропущенные.
                     no_progress_steps = 0
                     recent_signatures.clear()
                     step_made_progress = False
-                    break
+                    skip_remaining_calls = True
 
             if step_made_progress:
                 no_progress_steps = 0
@@ -786,10 +801,10 @@ def _autonomous_browse(
                 function_output_items.append(
                     {
                         "type": "function_call_output",
-                        "call_id": out["tool_call_id"],   # ВАЖНО: call_id, не tool_call_id
-                    "output": out["output"],
-                }
-            )
+                        "call_id": out["tool_call_id"],  # ВАЖНО: call_id, не tool_call_id
+                        "output": out["output"],
+                    }
+                )
 
             extra = function_output_items + (pending_messages or [])
             response = _request_response(extra_input=extra)
