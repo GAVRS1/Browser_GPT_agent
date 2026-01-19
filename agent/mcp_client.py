@@ -216,3 +216,24 @@ class MCPToolClient:
         success, observation = _parse_payload(raw_content)
         is_error = bool(getattr(result, "is_error", False))
         return MCPToolCallResult(success and not is_error, observation)
+
+
+_shared_client: Optional[MCPToolClient] = None
+_shared_lock = threading.Lock()
+
+
+def get_shared_mcp_client() -> MCPToolClient:
+    global _shared_client
+    with _shared_lock:
+        if _shared_client is None:
+            _shared_client = MCPToolClient()
+        return _shared_client
+
+
+def close_shared_mcp_client() -> None:
+    global _shared_client
+    with _shared_lock:
+        if _shared_client is None:
+            return
+        _shared_client.close()
+        _shared_client = None

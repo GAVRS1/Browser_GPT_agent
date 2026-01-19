@@ -2,7 +2,11 @@ import sys
 
 from loguru import logger
 from agent.agent_loop import enable_console_confirmation, agent_is_busy, run_agent
-from agent.mcp_client import MCPToolClient, format_exception_details
+from agent.mcp_client import (
+    close_shared_mcp_client,
+    format_exception_details,
+    get_shared_mcp_client,
+)
 from agent.tools_init import register_all_tools
 from browser.context import get_page
 
@@ -39,7 +43,7 @@ def _initialize_environment() -> bool:
         print("Не удалось открыть браузер / инструменты недоступны.")
         return False
 
-    mcp_client = MCPToolClient()
+    mcp_client = get_shared_mcp_client()
     try:
         mcp_client.list_tools()
     except Exception as exc:  # noqa: BLE001
@@ -49,11 +53,6 @@ def _initialize_environment() -> bool:
         )
         print("Не удалось открыть браузер / инструменты недоступны.")
         return False
-    finally:
-        try:
-            mcp_client.close()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[main] Не удалось закрыть MCP клиент: {exc}")
 
     return True
 
@@ -62,35 +61,37 @@ def main():
     logger.info("=== Browser AI Agent (Console Mode) ===")
     logger.info("Браузер запускается...")
 
-    if not _initialize_environment():
-        return
+    try:
+        if not _initialize_environment():
+            return
 
-    print("\nВведите задачу для агента.")
+        print("\nВведите задачу для агента.")
 
-    while True:
-        try:
-            goal = input("\n>>> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            break
+        while True:
+            try:
+                goal = input("\n>>> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
 
-        if not goal:
-            print("Введите корректный запрос.")
-            continue
+            if not goal:
+                print("Введите корректный запрос.")
+                continue
 
-        if goal.lower() in {"exit", "quit", "выход"}:
-            break
+            if goal.lower() in {"exit", "quit", "выход"}:
+                break
 
-        if agent_is_busy():
-            print("Ассистент занят. Подождите...")
-            continue
+            if agent_is_busy():
+                print("Ассистент занят. Подождите...")
+                continue
 
-        try:
-            run_agent(goal)
-        except Exception as exc:
-            logger.error(f"[main] Ошибка агента: {exc}")
-            print("Ошибка выполнения задачи.")
-
-    print("\nЗавершение работы агента.")
+            try:
+                run_agent(goal)
+            except Exception as exc:
+                logger.error(f"[main] Ошибка агента: {exc}")
+                print("Ошибка выполнения задачи.")
+    finally:
+        close_shared_mcp_client()
+        print("\nЗавершение работы агента.")
 
 
 if __name__ == "__main__":
