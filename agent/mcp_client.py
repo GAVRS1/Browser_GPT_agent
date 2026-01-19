@@ -78,7 +78,6 @@ class MCPToolClient:
         self._serve_task = asyncio.create_task(
             self._serve(self._ready_future, self._shutdown_event)
         )
-        self._serve_task.add_done_callback(self._handle_serve_task_done)
         await self._ready_future
 
     def close(self) -> None:
@@ -92,10 +91,7 @@ class MCPToolClient:
         if self._shutdown_event is not None:
             self._shutdown_event.set()
         if self._serve_task is not None:
-            try:
-                await self._serve_task
-            except Exception:
-                logger.exception("[mcp] Serve task failed during shutdown.")
+            await self._serve_task
         self._serve_task = None
         self._shutdown_event = None
         self._ready_future = None
@@ -127,16 +123,6 @@ class MCPToolClient:
         finally:
             self._session = None
             self._tools_cache = None
-
-    def _handle_serve_task_done(self, task: asyncio.Task) -> None:
-        if task.cancelled():
-            logger.info("[mcp] Serve task cancelled.")
-            return
-        exception = task.exception()
-        if exception is not None:
-            logger.exception(
-                "[mcp] Serve task exited with error.", exc_info=exception
-            )
 
     def list_tools(self) -> List[Dict[str, Any]]:
         self.start()
