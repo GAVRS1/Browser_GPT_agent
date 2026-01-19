@@ -544,10 +544,10 @@ def _autonomous_browse(
             call_id = (
                 getattr(item, "call_id", None)
                 or (item.get("call_id") if isinstance(item, dict) else None)
-                or getattr(item, "tool_call_id", None)
-                or (item.get("tool_call_id") if isinstance(item, dict) else None)
                 or getattr(item, "id", None)
                 or (item.get("id") if isinstance(item, dict) else None)
+                or getattr(item, "tool_call_id", None)
+                or (item.get("tool_call_id") if isinstance(item, dict) else None)
             )
 
             # Достаём name/arguments (они могут лежать по-разному)
@@ -652,17 +652,6 @@ def _autonomous_browse(
                         }
                     )
                     continue
-
-                if not call.get("id"):
-                    logger.error(
-                        "[agent] Tool call missing call_id; cannot return tool output."
-                    )
-                    return (
-                        "failed",
-                        "LLM вернул вызов инструмента без call_id, "
-                        "поэтому невозможно отправить результат. "
-                        "Пожалуйста, повторите задачу.",
-                    )
 
                 # Подпись действия для детектора циклов
                 sig = f"{call['name']}:{call['arguments']}"
