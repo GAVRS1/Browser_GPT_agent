@@ -123,6 +123,35 @@ class BrowserToolbox:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[tools] Failed to refresh page after close: {exc}")
 
+    def _snapshot_pages(self) -> list[Page]:
+        try:
+            return list(self.page.context.pages)
+        except Exception:
+            return []
+
+    def _switch_to_new_tab(self, before_pages: list[Page]) -> Optional[Page]:
+        """Переключается на новую вкладку, если она открылась после клика."""
+
+        try:
+            context = self.page.context
+        except Exception:
+            return None
+
+        deadline = time.time() + 1.5
+        while time.time() < deadline:
+            new_pages = [
+                candidate
+                for candidate in context.pages
+                if candidate not in before_pages and not candidate.is_closed()
+            ]
+            if new_pages:
+                new_page = new_pages[-1]
+                self.page = new_page
+                self._apply_default_timeouts(new_page)
+                return new_page
+            time.sleep(0.1)
+        return None
+
     # ------------------------------------------------------------
     # OpenAI tool schemas
     # ------------------------------------------------------------
@@ -673,10 +702,13 @@ class BrowserToolbox:
                     )
                     return ToolResult("click", False, result_message)
             try:
+                before_pages = self._snapshot_pages()
                 # Критическое место: если Playwright залипнет, мы не повиснем навсегда
                 candidate.click(timeout=timeouts.click_timeout_ms())
                 result_message = f"Клик по {query} выполнен"
                 chosen_summary = _describe_locator(candidate)
+                if self._switch_to_new_tab(before_pages):
+                    result_message += " (открылась новая вкладка)"
             except PlaywrightTimeoutError as exc:
                 result_message = f"Клик по {query} не завершился по таймауту: {exc}"
             except Exception as exc:
@@ -1206,6 +1238,7 @@ class BrowserToolbox:
                 pass
 
             clicked = False
+            before_pages = self._snapshot_pages()
             for target in [cand.get("add_button"), cand.get("locator")]:
                 if not target:
                     continue
@@ -1221,6 +1254,9 @@ class BrowserToolbox:
             if not clicked:
                 failure_reasons.append("клик не сработал")
                 continue
+
+            if self._switch_to_new_tab(before_pages):
+                return "Кликнул по карточке и открыл новую вкладку."
 
             time.sleep(1)
             after_state = _snapshot_page_state(page)
