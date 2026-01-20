@@ -893,6 +893,16 @@ def _autonomous_browse(
         ]
         full_report = "\n".join([part for part in report_parts if part])
 
+        if plan_text:
+            plan_text_clean = plan_text.strip()
+            if plan_text_clean:
+                if DEBUG_THOUGHTS:
+                    print("\nПлан →")
+                    print(plan_text_clean)
+                else:
+                    print(action_status("План", "итог"))
+                    print(plan_text_clean)
+
         if DEBUG_THOUGHTS:
             print("\n✅ Финальный ответ агента:")
             print(final_text)
