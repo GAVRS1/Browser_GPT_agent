@@ -432,6 +432,7 @@ def _autonomous_browse(
     # АНТИ-ЗАЦИКЛИВАНИЕ
     recent_signatures: List[str] = []  # история последних действий (имя + аргументы)
     no_progress_steps = 0              # шаги подряд без изменения наблюдения
+    stall_cycles = 0                  # сколько раз подряд ловили "нет прогресса"
     last_observation = observation     # последнее observation, чтобы сравнивать
     last_read_view_step = 0
     waited_for_dom = False
@@ -781,10 +782,22 @@ def _autonomous_browse(
 
             if step_made_progress:
                 no_progress_steps = 0
+                stall_cycles = 0
             else:
                 no_progress_steps += 1
 
             if no_progress_steps >= 3:
+                stall_cycles += 1
+                if stall_cycles >= 2:
+                    msg = (
+                        "Несколько попыток подряд не привели к изменениям на странице. "
+                        "Похоже, агент застрял и не может найти нужный элемент. "
+                        "Попробуйте уточнить запрос (например, название товара) "
+                        "или проверьте страницу вручную, затем повторите задачу."
+                    )
+                    if DEBUG_THOUGHTS:
+                        print("⚠ " + msg)
+                    return "failed", msg
                 msg = (
                     "Несколько действий подряд не привели к заметным изменениям на странице. "
                     "Ранее агент останавливался, чтобы не зациклиться, но теперь он "
