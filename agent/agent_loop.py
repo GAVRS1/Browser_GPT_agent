@@ -657,6 +657,10 @@ def _autonomous_browse(
                     if missing_url_message:
                         return "needs_input", missing_url_message
                 else:
+                    thought_text = f"Сейчас выполняю инструмент {call['name']}."
+                    log_thought("agent-thought", thought_text)
+                    if DEBUG_THOUGHTS:
+                        print(thought_text)
                     call_result = tool_client.call_tool(call["name"], args)
                     result = ToolResult(
                         call["name"],
@@ -673,11 +677,21 @@ def _autonomous_browse(
                     if approved:
                         retry_args = dict(args)
                         retry_args["_confirmed"] = True
+                        thought_text = f"Сейчас повторяю инструмент {call['name']} после подтверждения."
+                        log_thought("agent-thought", thought_text)
+                        if DEBUG_THOUGHTS:
+                            print(thought_text)
                         retry_result = tool_client.call_tool(call["name"], retry_args)
                         result = ToolResult(call["name"], retry_result.success, retry_result.observation)
 
                 # Краткая строка результата
                 short_line = f"{result.name}: {'ok' if result.success else 'fail'}"
+                result_text = (
+                    f"Готово: {result.name} выполнен." if result.success else f"Готово: {result.name} не удалось."
+                )
+                log_thought("agent-thought", result_text)
+                if DEBUG_THOUGHTS:
+                    print(result_text)
                 actions.append(short_line)
 
                 formatted = format_tool_observation(result)
