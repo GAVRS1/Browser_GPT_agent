@@ -285,7 +285,10 @@ class BrowserToolbox:
             if tool_name == "wait_for_dom_stable":
                 return ToolResult(tool_name, True, self.wait_for_dom_stable())
             if tool_name == "open_url":
-                return ToolResult(tool_name, True, self.open_url(arguments.get("url", "")))
+                result = self.open_url(arguments.get("url", ""))
+                if isinstance(result, ToolResult):
+                    return result
+                return ToolResult(tool_name, True, result)
             if tool_name == "click":
                 result = self.click(
                     arguments.get("query", ""),
@@ -295,15 +298,14 @@ class BrowserToolbox:
                     return result
                 return ToolResult(tool_name, True, result)
             if tool_name == "type_text":
-                return ToolResult(
-                    tool_name,
-                    True,
-                    self.type_text(
-                        arguments.get("query", ""),
-                        arguments.get("text", ""),
-                        bool(arguments.get("press_enter", False)),
-                    ),
+                result = self.type_text(
+                    arguments.get("query", ""),
+                    arguments.get("text", ""),
+                    bool(arguments.get("press_enter", False)),
                 )
+                if isinstance(result, ToolResult):
+                    return result
+                return ToolResult(tool_name, True, result)
             if tool_name == "scroll":
                 return ToolResult(
                     tool_name,
@@ -316,7 +318,10 @@ class BrowserToolbox:
             if tool_name == "go_back":
                 return ToolResult(tool_name, True, self.go_back())
             if tool_name == "click_product_card":
-                return ToolResult(tool_name, True, self.click_product_card())
+                result = self.click_product_card()
+                if isinstance(result, ToolResult):
+                    return result
+                return ToolResult(tool_name, True, result)
             if tool_name == "take_screenshot":
                 return ToolResult(
                     tool_name,
@@ -599,10 +604,11 @@ class BrowserToolbox:
 
         return json.dumps(summary, ensure_ascii=False)[:1800]
 
-    def open_url(self, url: str) -> str:
+    def open_url(self, url: str) -> ToolResult:
         if not url:
-            return "URL не задан"
+            return ToolResult("open_url", False, "URL не задан")
         self._ensure_page_alive()
+        before_state = _snapshot_page_state(self.page)
         navigation_timeout_ms = timeouts.navigation_timeout_ms()
         try:
             self.page.goto(
@@ -627,16 +633,28 @@ class BrowserToolbox:
                     extended_timeout_ms,
                     exc2,
                 )
-                return (
-                    f"Не удалось открыть страницу по таймауту {extended_timeout_ms} мс. "
-                    f"Текущий URL: {self.page.url}"
+                return ToolResult(
+                    "open_url",
+                    False,
+                    (
+                        f"Не удалось открыть страницу по таймауту {extended_timeout_ms} мс. "
+                        f"Текущий URL: {self.page.url}"
+                    ),
                 )
 
-        return f"Открыл {self.page.url}"
+        after_state = _snapshot_page_state(self.page)
+        if not _state_changed(before_state, after_state):
+            return ToolResult(
+                "open_url",
+                False,
+                f"Навигация завершилась без заметных изменений. Текущий URL: {self.page.url}",
+            )
 
-    def click(self, query: str, allow_risky: bool = False) -> str | ToolResult:
+        return ToolResult("open_url", True, f"Открыл {self.page.url}")
+
+    def click(self, query: str, allow_risky: bool = False) -> ToolResult:
         if not query:
-            return "Пустой запрос — клик не выполнен"
+            return ToolResult("click", False, "Пустой запрос — клик не выполнен")
 
         # Обновляем страницу, если предыдущая вкладка умерла
         self._ensure_page_alive()
@@ -671,6 +689,7 @@ class BrowserToolbox:
 
         result_message = ""
         chosen_summary = ""
+        click_succeeded = False
 
         if candidate:
             if not allow_risky:
@@ -707,6 +726,7 @@ class BrowserToolbox:
                 candidate.click(timeout=timeouts.click_timeout_ms())
                 result_message = f"Клик по {query} выполнен"
                 chosen_summary = _describe_locator(candidate)
+                click_succeeded = True
                 if self._switch_to_new_tab(before_pages):
                     result_message += " (открылась новая вкладка)"
             except PlaywrightTimeoutError as exc:
@@ -728,13 +748,12 @@ class BrowserToolbox:
             chosen_summary=chosen_summary,
             result=result_message,
         )
+        return ToolResult("click", click_succeeded, result_message)
 
-        return result_message
 
-
-    def type_text(self, query: str, text: str, press_enter: bool = False) -> str:
+    def type_text(self, query: str, text: str, press_enter: bool = False) -> ToolResult:
         if not query:
-            return "Нет запроса для ввода"
+            return ToolResult("type_text", False, "Нет запроса для ввода")
 
         self._ensure_page_alive()
         page = self.page
@@ -764,7 +783,7 @@ class BrowserToolbox:
                         chosen_summary=_describe_locator(direct_locator),
                         result=result_message,
                     )
-                    return result_message
+                    return ToolResult("type_text", True, result_message)
 
             vision_hint = self._vision_locate_input(query)
             if vision_hint:
@@ -782,12 +801,20 @@ class BrowserToolbox:
                         chosen_summary=_describe_locator_from_hint(vision_hint),
                         result=result_message,
                     )
-                    return result_message
+                    return ToolResult("type_text", True, result_message)
 
             if text and _looks_like_web_search_request(query, text):
                 search_url = _build_search_url(text)
                 if search_url:
-                    result_message = self.open_url(search_url)
+                    open_result = self.open_url(search_url)
+                    if isinstance(open_result, ToolResult):
+                        result_message = (
+                            f"{open_result.observation} (через поисковый URL)"
+                        )
+                        success = open_result.success
+                    else:
+                        result_message = f"{open_result} (через поисковый URL)"
+                        success = True
                     _log_interaction(
                         action="type_text-search-url",
                         query=query,
@@ -795,7 +822,7 @@ class BrowserToolbox:
                         chosen_summary="",
                         result=result_message,
                     )
-                    return result_message
+                    return ToolResult("type_text", success, result_message)
 
         candidate = self._find_text_locator(query)
         if candidate:
@@ -815,7 +842,7 @@ class BrowserToolbox:
                     chosen_summary=_describe_locator(candidate),
                     result=result_message,
                 )
-                return result_message
+                return ToolResult("type_text", True, result_message)
 
         vision_hint = self._vision_locate_input(query)
         if vision_hint:
@@ -833,7 +860,7 @@ class BrowserToolbox:
                     chosen_summary=_describe_locator_from_hint(vision_hint),
                     result=result_message,
                 )
-                return result_message
+                return ToolResult("type_text", True, result_message)
 
         result_message = f"Не удалось найти поле для ввода по запросу: {query}"
         _log_interaction(
@@ -843,7 +870,7 @@ class BrowserToolbox:
             chosen_summary="",
             result=result_message,
         )
-        return result_message
+        return ToolResult("type_text", False, result_message)
 
     def _find_text_locator(self, query: str) -> Optional[Locator]:
         page = self.page
@@ -1132,7 +1159,7 @@ class BrowserToolbox:
             self.page.go_back()
         return "Вернулся на предыдущую страницу"
 
-    def click_product_card(self) -> str:
+    def click_product_card(self) -> ToolResult:
         """
         Улучшенный алгоритм клика по карточке товара или слота.
 
@@ -1159,10 +1186,18 @@ class BrowserToolbox:
             total = containers.count()
         except Exception as exc:
             logger.error(f"[tools] click_product_card: cannot count: {exc}")
-            return "Не удалось получить список элементов."
+            return ToolResult(
+                "click_product_card",
+                False,
+                "Не удалось получить список элементов.",
+            )
 
         if total == 0:
-            return "Не нашёл ни одного контейнера-карточки."
+            return ToolResult(
+                "click_product_card",
+                False,
+                "Не нашёл ни одного контейнера-карточки.",
+            )
 
         candidates = []
         max_to_check = min(total, 50)
@@ -1223,7 +1258,11 @@ class BrowserToolbox:
                 continue
 
         if not candidates:
-            return "Не удалось найти карточку товара."
+            return ToolResult(
+                "click_product_card",
+                False,
+                "Не удалось найти карточку товара.",
+            )
 
         candidates.sort(key=lambda x: x["score"], reverse=True)
 
@@ -1256,7 +1295,11 @@ class BrowserToolbox:
                 continue
 
             if self._switch_to_new_tab(before_pages):
-                return "Кликнул по карточке и открыл новую вкладку."
+                return ToolResult(
+                    "click_product_card",
+                    True,
+                    "Кликнул по карточке и открыл новую вкладку.",
+                )
 
             time.sleep(1)
             after_state = _snapshot_page_state(page)
@@ -1265,7 +1308,11 @@ class BrowserToolbox:
                 cart_has_items or before_cart_filled != cart_has_items
             ):
                 if cart_has_items:
-                    return "Кликнул по карточке товара и корзина не пустая."
+                    return ToolResult(
+                        "click_product_card",
+                        True,
+                        "Кликнул по карточке товара и корзина не пустая.",
+                    )
                 failure_reasons.append("после клика корзина выглядит пустой")
                 continue
 
@@ -1273,7 +1320,11 @@ class BrowserToolbox:
             # Пытаемся следующую карточку
 
         details = "; ".join(failure_reasons) or "кандидаты не подошли"
-        return f"Не удалось выбрать карточку товара: {details}."
+        return ToolResult(
+            "click_product_card",
+            False,
+            f"Не удалось выбрать карточку товара: {details}.",
+        )
 
 
 def safe_title(page: Page) -> str:
@@ -1931,8 +1982,12 @@ def _detect_manual_input_state(
 
 
 def format_tool_observation(result: ToolResult) -> str:
+    status = "ok" if result.success else "fail"
+    observation = result.observation
+    if not result.success:
+        observation = f"причина: {observation}"
     return textwrap.shorten(
-        f"{result.name}: {'ok' if result.success else 'fail'} — {result.observation}",
+        f"{result.name}: {status} — {observation}",
         width=900,
         placeholder="…",
     )
