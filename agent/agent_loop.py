@@ -433,6 +433,7 @@ def _autonomous_browse(
     recent_signatures: List[str] = []  # история последних действий (имя + аргументы)
     no_progress_steps = 0              # шаги подряд без изменения наблюдения
     last_observation = observation     # последнее observation, чтобы сравнивать
+    last_read_view_step = 0
     waited_for_dom = False
     no_tool_calls = 0
 
@@ -688,6 +689,7 @@ def _autonomous_browse(
                 if result.name == "open_url":
                     _wait_for_dom("after open_url")
                 if result.name == "read_view":
+                    last_read_view_step = step_idx + 1
                     login_state = _parse_needs_login(result.observation)
                     if login_state.get("needs_login"):
                         indicators = ", ".join(
@@ -846,6 +848,27 @@ def _autonomous_browse(
             return "failed", msg
 
         # Нет tool_calls — считаем, что это финальный ответ
+        if last_read_view_step < step_idx + 1:
+            wait_call = tool_client.call_tool("wait_for_dom_stable", {})
+            wait_result = ToolResult(
+                "wait_for_dom_stable",
+                wait_call.success,
+                wait_call.observation,
+            )
+            actions.append(f"{wait_result.name}: {'ok' if wait_result.success else 'fail'}")
+            actions.append(format_tool_observation(wait_result))
+
+            final_view_call = tool_client.call_tool("read_view", {})
+            final_view = ToolResult(
+                "read_view",
+                final_view_call.success,
+                final_view_call.observation,
+            )
+            actions.append(f"{final_view.name}: {'ok' if final_view.success else 'fail'}")
+            actions.append(format_tool_observation(final_view))
+            last_observation = final_view.observation
+            last_read_view_step = step_idx + 1
+
         final_text = message_text or ""
         summary = "\n".join(actions[-8:])
         report_parts = [
