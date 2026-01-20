@@ -1813,10 +1813,8 @@ def _detect_login_state(page: Page) -> Dict[str, Any]:
         "log in",
         "login",
         "войти",
-        "вход",
         "авторизация",
         "авторизоваться",
-        "аккаунт",
     ]
     login_pattern = re.compile("|".join(re.escape(text) for text in login_texts), re.IGNORECASE)
 
