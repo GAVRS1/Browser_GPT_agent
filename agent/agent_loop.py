@@ -717,6 +717,9 @@ def _autonomous_browse(
             waited_for_dom = False
             tool_outputs: List[Dict[str, str]] = []
             skip_remaining_calls = False
+            read_view_in_batch = False
+            post_batch_view: Optional[str] = None
+            post_batch_view_success: Optional[bool] = None
 
             for call in tool_calls:
                 if skip_remaining_calls:
@@ -797,6 +800,7 @@ def _autonomous_browse(
                 if result.name == "open_url":
                     _wait_for_dom("after open_url")
                 if result.name == "read_view":
+                    read_view_in_batch = True
                     last_read_view_step = step_idx + 1
                     login_state = _parse_needs_login(result.observation)
                     if login_state.get("needs_login"):
@@ -918,6 +922,7 @@ def _autonomous_browse(
                 actions.append("read_view: ok")
                 actions.append(f"read_view: {refreshed_view}")
                 last_observation = refreshed_view
+                read_view_in_batch = True
                 pending_messages.append(
                     {
                         "role": "system",
@@ -928,6 +933,28 @@ def _autonomous_browse(
                     }
                 )
                 no_progress_steps = 0
+
+            if not read_view_in_batch:
+                _wait_for_dom("missing read_view in tool batch")
+                refreshed_call = tool_client.call_tool("read_view", {})
+                refreshed_view = refreshed_call.observation
+                actions.append(
+                    f"read_view: {'ok' if refreshed_call.success else 'fail'}"
+                )
+                actions.append(f"read_view: {refreshed_view}")
+                last_observation = refreshed_view
+                last_read_view_step = step_idx + 1
+                post_batch_view = refreshed_view
+                post_batch_view_success = refreshed_call.success
+                pending_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Обновлённое наблюдение после пакета инструментов: "
+                            f"{refreshed_view}"
+                        ),
+                    }
+                )
 
             # --- ВАЖНО: вернуть tool outputs модели в формате Responses API ---
             function_output_items: List[Dict[str, Any]] = []
@@ -941,24 +968,27 @@ def _autonomous_browse(
                 )
 
             logger.info(f"[agent] sending function_call_output items: {function_output_items}")
-            _wait_for_dom("post tool batch")
-            refreshed_call = tool_client.call_tool("read_view", {})
-            refreshed_view = refreshed_call.observation
-            actions.append(
-                f"read_view: {'ok' if refreshed_call.success else 'fail'}"
-            )
-            actions.append(f"read_view: {refreshed_view}")
-            last_observation = refreshed_view
-            last_read_view_step = step_idx + 1
-            pending_messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "Обновлённое наблюдение после пакета инструментов: "
-                        f"{refreshed_view}"
-                    ),
-                }
-            )
+            if post_batch_view is None:
+                _wait_for_dom("post tool batch")
+                refreshed_call = tool_client.call_tool("read_view", {})
+                post_batch_view = refreshed_call.observation
+                post_batch_view_success = refreshed_call.success
+                actions.append(
+                    f"read_view: {'ok' if refreshed_call.success else 'fail'}"
+                )
+                actions.append(f"read_view: {post_batch_view}")
+                last_observation = post_batch_view
+                last_read_view_step = step_idx + 1
+                pending_messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Обновлённое наблюдение после пакета инструментов: "
+                            f"{post_batch_view}"
+                        ),
+                    }
+                )
+            refreshed_view = post_batch_view or ""
             login_state = _parse_needs_login(refreshed_view)
             if login_state.get("needs_login"):
                 indicators = ", ".join(login_state.get("login_indicators", [])) or "unknown"
