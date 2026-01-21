@@ -23,11 +23,21 @@ class SubAgentResult:
 
 
 from .base import BaseSubAgent
+from .email import (
+    EmailComposeSubAgent,
+    EmailDeleteSubAgent,
+    EmailReplySubAgent,
+    EmailViewSubAgent,
+)
 from .rental import RentalPaymentSubAgent, RentalReservationSubAgent, RentalSearchSubAgent
 
 
 # Здесь регистрируем компетенции под аренду.
 _SUBAGENTS: List[BaseSubAgent] = [
+    EmailViewSubAgent(),
+    EmailComposeSubAgent(),
+    EmailReplySubAgent(),
+    EmailDeleteSubAgent(),
     RentalSearchSubAgent(),
     RentalReservationSubAgent(),
     RentalPaymentSubAgent(),
