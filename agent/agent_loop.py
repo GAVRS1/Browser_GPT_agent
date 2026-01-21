@@ -138,6 +138,15 @@ def _normalized_signature(name: str, args: Dict[str, Any]) -> str:
     normalized_json = json.dumps(normalized_args, sort_keys=True, ensure_ascii=False)
     return f"{name}:{normalized_json}"
 
+
+def _format_function_call_output(success: bool, name: str, observation: Any) -> str:
+    payload = {
+        "success": success,
+        "name": name,
+        "observation": observation,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
 # ============================================================================
 # State helpers
 # ============================================================================
@@ -775,12 +784,17 @@ def _autonomous_browse(
 
             for call in tool_calls:
                 if skip_remaining_calls:
+                    skipped_message = (
+                        "skipped_tool_call: skipped due to loop guard; "
+                        "choose a different action."
+                    )
                     tool_outputs.append(
                         {
                             "call_id": call["call_id"],
-                            "output": (
-                                "skipped_tool_call: skipped due to loop guard; "
-                                "choose a different action."
+                            "output": _format_function_call_output(
+                                False,
+                                call["name"],
+                                skipped_message,
                             ),
                         }
                     )
@@ -894,7 +908,11 @@ def _autonomous_browse(
                 tool_outputs.append(
                     {
                         "call_id": call["call_id"],
-                        "output": result.observation,
+                        "output": _format_function_call_output(
+                            result.success,
+                            result.name,
+                            result.observation,
+                        ),
                     }
                 )
 
