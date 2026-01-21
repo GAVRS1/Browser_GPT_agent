@@ -13,6 +13,8 @@ def log_thought(prefix: str, text: str) -> None:
     if not text:
         return
 
-    logger.info(f"[{prefix}] thought: {text}")
     if DEBUG_THOUGHTS:
+        logger.info(f"[{prefix}] thought: {text}")
         print(f"\n🤖 {prefix} думает:\n{text.strip()}\n")
+    else:
+        logger.info(text)
