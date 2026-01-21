@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -252,6 +253,72 @@ def _is_risky_goal(goal: str) -> bool:
     - отклики на вакансии / отправка резюме, заявок.
     """
     return is_risky_text(goal)
+
+
+def _normalize_text(text: str) -> str:
+    cleaned = re.sub(r"[^\w\s/-]+", " ", text.lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _extract_goal_keywords(goal: str) -> List[str]:
+    normalized = _normalize_text(goal)
+    return [token for token in normalized.split() if len(token) >= 3]
+
+
+def _read_view_payload(read_view: str) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(read_view)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def is_goal_reached(goal: str, read_view: str) -> bool:
+    payload = _read_view_payload(read_view)
+    if not payload:
+        return False
+
+    chunks: List[str] = []
+    for key in ("url", "title"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            chunks.append(value)
+
+    interactive = payload.get("interactive", [])
+    if isinstance(interactive, list):
+        for item in interactive:
+            if isinstance(item, dict):
+                text = item.get("text") or ""
+                if text:
+                    chunks.append(str(text))
+
+    product_cards = payload.get("product_cards", [])
+    if isinstance(product_cards, list):
+        for card in product_cards:
+            if not isinstance(card, dict):
+                continue
+            for key in ("text", "name", "description", "composition", "price_text", "weight_text"):
+                value = card.get(key)
+                if isinstance(value, str) and value:
+                    chunks.append(value)
+
+    combined = _normalize_text(" ".join(chunks))
+    if not combined:
+        return False
+
+    normalized_goal = _normalize_text(goal)
+    if normalized_goal and normalized_goal in combined:
+        return True
+
+    keywords = _extract_goal_keywords(goal)
+    if not keywords:
+        return False
+
+    hits = sum(1 for token in set(keywords) if token in combined)
+    threshold = 1 if len(keywords) <= 2 else 2
+    return hits >= threshold
 
 
 # ============================================================================
@@ -593,6 +660,32 @@ def _autonomous_browse(
         )
         waited_for_dom = True
 
+    def _build_final_report(final_text: str) -> str:
+        summary = "\n".join(actions[-8:])
+        report_parts = [
+            "Автономный отчёт:",
+            summary or "(действия не требовались)",
+            "",
+            final_text,
+        ]
+        return "\n".join([part for part in report_parts if part])
+
+    def _finalize_if_goal_reached(view_text: str) -> Optional[tuple[str, str]]:
+        payload = _read_view_payload(view_text) or {}
+        if not is_goal_reached(goal, view_text):
+            return None
+
+        url = payload.get("url") if isinstance(payload.get("url"), str) else ""
+        title = payload.get("title") if isinstance(payload.get("title"), str) else ""
+        cards = payload.get("product_cards", [])
+        cards_count = len(cards) if isinstance(cards, list) else 0
+        final_text = (
+            "Цель достигнута по последнему наблюдению страницы. "
+            f"URL: {url or '—'}, Title: {title or '—'}. "
+            f"Карточек предложений обнаружено: {cards_count}."
+        )
+        return "completed", _build_final_report(final_text)
+
     # Лимит шагов, чтобы не крутиться бесконечно
     for step_idx in range(30):
         reminder = screenshot_cache.reminder_message()
@@ -848,6 +941,47 @@ def _autonomous_browse(
                 )
 
             logger.info(f"[agent] sending function_call_output items: {function_output_items}")
+            _wait_for_dom("post tool batch")
+            refreshed_call = tool_client.call_tool("read_view", {})
+            refreshed_view = refreshed_call.observation
+            actions.append(
+                f"read_view: {'ok' if refreshed_call.success else 'fail'}"
+            )
+            actions.append(f"read_view: {refreshed_view}")
+            last_observation = refreshed_view
+            last_read_view_step = step_idx + 1
+            pending_messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Обновлённое наблюдение после пакета инструментов: "
+                        f"{refreshed_view}"
+                    ),
+                }
+            )
+            login_state = _parse_needs_login(refreshed_view)
+            if login_state.get("needs_login"):
+                indicators = ", ".join(login_state.get("login_indicators", [])) or "unknown"
+                return (
+                    "needs_input",
+                    "Обнаружена страница входа (признаки: "
+                    f"{indicators}). Пожалуйста, войдите вручную в браузере, "
+                    "затем повторно запустите задачу — агент продолжит "
+                    "с текущей сессией.",
+                )
+            manual_state = _parse_needs_input(refreshed_view)
+            if manual_state.get("needs_input"):
+                indicators = ", ".join(manual_state.get("manual_input_indicators", [])) or "unknown"
+                return (
+                    "needs_input",
+                    "Обнаружен запрос на CAPTCHA/2FA/оплату (признаки: "
+                    f"{indicators}). Пожалуйста, выполните требуемое действие "
+                    "вручную в браузере, затем повторно запустите задачу — агент "
+                    "продолжит с текущей сессией.",
+                )
+            goal_result = _finalize_if_goal_reached(refreshed_view)
+            if goal_result:
+                return goal_result
             pending_messages = function_output_items + (pending_messages or [])
             continue
 
@@ -897,14 +1031,7 @@ def _autonomous_browse(
             last_read_view_step = step_idx + 1
 
         final_text = message_text or ""
-        summary = "\n".join(actions[-8:])
-        report_parts = [
-            "Автономный отчёт:",
-            summary or "(действия не требовались)",
-            "",
-            final_text,
-        ]
-        full_report = "\n".join([part for part in report_parts if part])
+        full_report = _build_final_report(final_text)
 
         if plan_text:
             plan_text_clean = plan_text.strip()
