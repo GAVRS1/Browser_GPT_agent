@@ -10,6 +10,9 @@ Browser GPT Agent — автономный AI-агент на Python, работ
 
 ## ⚙️ Настройка .env
 ```plaintext
+# =========================
+# LLM
+# =========================
 LLM_PROVIDER=gpt # gpt или glm
 OPENAI_API_KEY= # ключ OpenAI
 OPENAI_MODEL= # модель OpenAI (опционально)
@@ -17,15 +20,32 @@ OPENAI_BASE_URL= # кастомный OpenAI-совместимый URL (по у
 GLM_API_KEY= # ключ ZhipuAI (для glm)
 GLM_MODEL=glm-4.6 # модель GLM (опционально)
 GLM_BASE_URL=https://api.z.ai/v1 # базовый URL для GLM API
+
+# =========================
+# ПРОКСИ
+# =========================
 PROXY= # прокси для запросов к API (опционально)
-BROWSER_PROXY= # включение/выключение прокси в браузере, false чтобы прокси был только у агента
-# таймауты по умолчанию
+BROWSER_PROXY=false # включение/выключение прокси в браузере, false чтобы прокси был только у агента
+
+# =========================
+# НАВИГАЦИЯ И ПОИСК
+# =========================
+BROWSER_START_URL= # стартовый URL вместо поискового (опционально)
+SEARCH_URL_TEMPLATE= # URL шаблон поиска, например https://www.google.com/search?q={query}
+SEARCH_URL_MODE=auto # auto или url_template: использовать шаблон; form/disabled: искать через поле
+
+# =========================
+# ТАЙМАУТЫ БРАУЗЕРА (MS)
+# =========================
 BROWSER_DEFAULT_TIMEOUT_MS=3000
 BROWSER_NAVIGATION_TIMEOUT_MS=12000
 BROWSER_DOM_STABLE_TIMEOUT_MS=8000
 BROWSER_DOM_STABLE_INTERVAL_MS=500
 BROWSER_DOM_STABLE_CHECKS=3
-# дополнительные таймауты инструментов (опционально)
+
+# =========================
+# ТАЙМАУТЫ ИНСТРУМЕНТОВ (MS)
+# =========================
 BROWSER_TOOL_ACTION_TIMEOUT_MS=5000
 BROWSER_TOOL_DOM_STABLE_TIMEOUT_MS=5000
 BROWSER_CLICK_TIMEOUT_MS=2000
@@ -40,10 +60,13 @@ BROWSER_VISIBILITY_TIMEOUT_MS=1500
 BROWSER_INPUT_VALUE_TIMEOUT_MS=800
 BROWSER_BUTTON_ENABLED_TIMEOUT_MS=800
 BROWSER_NAVIGATION_RETRY_MIN_TIMEOUT_MS=15000
+
+# =========================
+# АГЕНТ
+# =========================
 AGENT_CONFIRMATION_TIMEOUT=60
 MAX_CYCLES=30
-SEARCH_URL_TEMPLATE= # URL шаблон поиска, например https://www.google.com/search?q={query}
-SEARCH_URL_MODE=auto # auto или url_template: использовать шаблон; form/disabled: искать через поле
+AGENT_DEBUG_THOUGHTS=0 # 1 чтобы вывести полные мысли агента
 ```
 
 Поисковый URL обязателен в режиме URL-шаблона — агент не подставляет значения по умолчанию,
