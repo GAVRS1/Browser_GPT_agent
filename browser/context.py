@@ -85,8 +85,7 @@ def get_context() -> BrowserContext:
         return _context
 
     logger.info("Starting Playwright and launching persistent Chromium context...")
-    logger.info(f"[browser] Playwright version: {playwright.__version__}")
-
+ 
     # Проксирование HTTP-запросов для LLM / API
     apply_requests_proxy()
 
