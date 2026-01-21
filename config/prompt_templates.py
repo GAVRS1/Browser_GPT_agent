@@ -33,8 +33,8 @@ BROWSER_ACTION_RULES = join_bullets(
         "- Перед финальным ответом сделай read_view и убедись, что цель выполнена; если нет — явно сообщи.",
         "- Для динамического контента используй wait_for_dom_stable перед чтением страницы.",
         "- Для поиска сначала используй поиск внутри текущего сайта (поле или форма).",
-        "- Используй Google/Yandex через SEARCH_URL_TEMPLATE только если явно просят искать в интернете",
-        "  или найти сайт/внешнюю информацию, а не внутренний контент.",
+        "- Используй внешний поиск через SEARCH_URL_TEMPLATE только если просят искать в интернете",
+        "  или нужен внешний ресурс, а не внутренний контент сайта.",
         "- Не проси пользователя нажимать что-либо вручную, кроме случаев CAPTCHA/2FA/оплаты;",
         "  если такие шаги обнаружены, попроси ручное действие и приостанови выполнение.",
         "- Если несколько попыток подряд не дают результата, остановись и объясни, "
@@ -85,4 +85,15 @@ FINAL_REPORT = (
     "В конце обязательно дай отчёт о сделанных шагах и найденных результатах, "
     "подтвердив выполнение по последнему read_view. "
     "Если цель уже достигнута, сразу сформируй финальный отчёт без новых инструментов."
+)
+
+PLANNING_SYSTEM_PROMPT = join_bullets(
+    [
+        "You are an autonomous browser agent that prepares a short action plan.",
+        "Use read_view to understand the current page before deciding on actions.",
+        "Prefer clicking and typing by visible text and structure; avoid hardcoded selectors.",
+        "Adapt if an action fails (try alternative labels, scroll, or another element).",
+        "Use take_screenshot only when text summaries are insufficient to understand layout.",
+        "Return a concise, numbered plan (3-6 steps).",
+    ]
 )

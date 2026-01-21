@@ -22,6 +22,20 @@ from browser.context import get_page
 from agent.llm_client import get_client
 from agent.risk_guard import risky_keyword_matches
 from config import timeouts
+from config.constants import (
+    CARD_BIG_COUNT_THRESHOLD,
+    CARD_MAX_CHECK_CLICK,
+    CARD_MAX_CHECK_READ,
+    CARD_MAX_CHECK_SCROLL,
+    CARD_OUTPUT_LIMIT,
+    CARD_SCORE_ADD_BUTTON_BONUS,
+    CARD_SCORE_PRICE_BONUS,
+    CARD_SCORE_RECIPE_PENALTY,
+    CARD_SCORE_TITLE_BONUS,
+    CARD_SCORE_TOKEN_BONUS,
+    DEFAULT_SCROLL_AMOUNT,
+    is_large_card,
+)
 from config.sites import SEARCH_URL_MODE, SEARCH_URL_TEMPLATE
 
 
@@ -234,8 +248,10 @@ class BrowserToolbox:
                         },
                         "amount": {
                             "type": "integer",
-                            "description": "Пиксели для скролла (по умолчанию 800).",
-                            "default": 800,
+                        "description": (
+                            f"Пиксели для скролла (по умолчанию {DEFAULT_SCROLL_AMOUNT})."
+                        ),
+                        "default": DEFAULT_SCROLL_AMOUNT,
                         },
                     },
                 },
@@ -486,7 +502,7 @@ class BrowserToolbox:
                 summary["product_cards"] = []
                 return json.dumps(summary, ensure_ascii=False)[:1800]
 
-            max_to_check = min(total, 40)
+            max_to_check = min(total, CARD_MAX_CHECK_READ)
 
             for i in range(max_to_check):
                 el = card_nodes.nth(i)
@@ -500,7 +516,7 @@ class BrowserToolbox:
                     area = w * h
 
                     # Отсекаем мелкие элементы
-                    if w < 120 or h < 140 or area < 15000:
+                    if not is_large_card(w, h, area):
                         continue
 
                     raw_text = ""
@@ -598,7 +614,7 @@ class BrowserToolbox:
                 except Exception:
                     continue
 
-            summary["product_cards"] = cards[:10]
+            summary["product_cards"] = cards[:CARD_OUTPUT_LIMIT]
         except Exception:
             summary["product_cards"] = []
 
@@ -1101,7 +1117,7 @@ class BrowserToolbox:
         if press_enter:
             handle.press("Enter")
 
-    def scroll(self, direction: str = "down", amount: int = 800) -> str:
+    def scroll(self, direction: str = "down", amount: Optional[int] = None) -> str:
         """
         Прокрутка страницы.
 
@@ -1122,7 +1138,7 @@ class BrowserToolbox:
             with contextlib.suppress(Exception):
                 total = containers.count()
             if total:
-                max_to_check = min(total, 40)
+                max_to_check = min(total, CARD_MAX_CHECK_SCROLL)
                 big = 0
 
                 for i in range(max_to_check):
@@ -1134,12 +1150,12 @@ class BrowserToolbox:
                         w = box.get("width") or 0
                         h = box.get("height") or 0
                         area = w * h
-                        if w >= 120 and h >= 140 and area >= 15000:
+                        if is_large_card(w, h, area):
                             big += 1
-                    if big >= 4:
+                    if big >= CARD_BIG_COUNT_THRESHOLD:
                         break
 
-                if big >= 4:
+                if big >= CARD_BIG_COUNT_THRESHOLD:
                     return (
                         "Видна сетка карточек предложений. "
                         "Скролл временно отключён: выбери подходящий элемент и кликни по карточке "
@@ -1148,10 +1164,11 @@ class BrowserToolbox:
         except Exception:
             pass
 
-        delta = amount if direction != "up" else -amount
+        resolved_amount = amount or DEFAULT_SCROLL_AMOUNT
+        delta = resolved_amount if direction != "up" else -resolved_amount
         with contextlib.suppress(Exception):
             page.mouse.wheel(0, delta)
-        return f"Прокрутил {direction} на {amount}"
+        return f"Прокрутил {direction} на {resolved_amount}"
 
     def go_back(self) -> str:
         self._ensure_page_alive()
@@ -1200,7 +1217,7 @@ class BrowserToolbox:
             )
 
         candidates = []
-        max_to_check = min(total, 50)
+        max_to_check = min(total, CARD_MAX_CHECK_CLICK)
 
         for i in range(max_to_check):
             el = containers.nth(i)
@@ -1213,7 +1230,7 @@ class BrowserToolbox:
                 h = box.get("height") or 0
                 area = w * h
 
-                if w < 120 or h < 140 or area < 15000:
+                if not is_large_card(w, h, area):
                     continue
 
                 with contextlib.suppress(Exception):
@@ -1611,15 +1628,15 @@ def _compute_card_score(
 ) -> float:
     score = area
     if has_price:
-        score += 50000
+        score += CARD_SCORE_PRICE_BONUS
     if has_title:
-        score += 15000
+        score += CARD_SCORE_TITLE_BONUS
     if has_add_button:
-        score += 60000
+        score += CARD_SCORE_ADD_BUTTON_BONUS
     if token_matches:
-        score += 70000 * token_matches
+        score += CARD_SCORE_TOKEN_BONUS * token_matches
     if is_recipe:
-        score -= 40000
+        score -= CARD_SCORE_RECIPE_PENALTY
     return score
 
 

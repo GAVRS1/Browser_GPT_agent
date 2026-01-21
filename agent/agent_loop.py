@@ -27,11 +27,19 @@ from config.prompt_templates import (
     BROWSER_ACTION_RULES,
     BROWSER_CONTEXT,
     FINAL_REPORT,
+    PLANNING_SYSTEM_PROMPT,
     RENTAL_FLOWS,
     SAFETY_LIMITS,
     SCREENSHOT_GUIDE,
     SESSION_RULES,
     compose_prompt,
+)
+from config.constants import (
+    CLICK_COORD_ROUNDING,
+    HISTORY_CONTEXT_LIMIT,
+    REPEAT_PATTERN_THRESHOLD,
+    REPEAT_PATTERN_WINDOW,
+    goal_keyword_hit_threshold,
 )
 from config.proxy import get_proxy_url
 from config.sites import AGENT_CONFIRMATION_TIMEOUT, MAX_CYCLES, SEARCH_URL_TEMPLATE
@@ -86,11 +94,6 @@ _console_confirmation_enabled = False
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _AGENT_STATE_DIR = os.path.join(_ROOT_DIR, "agent_state")
 _HISTORY_LOG_PATH = os.path.join(_AGENT_STATE_DIR, "history.log")
-_HISTORY_CONTEXT_LIMIT = 12
-
-_CLICK_COORD_ROUNDING = 5
-_REPEAT_PATTERN_WINDOW = 8
-_REPEAT_PATTERN_THRESHOLD = 4
 
 
 def _normalize_text_value(value: Optional[str]) -> str:
@@ -118,7 +121,7 @@ def _round_coord(value: Any) -> Optional[int]:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return int(round(number / _CLICK_COORD_ROUNDING) * _CLICK_COORD_ROUNDING)
+    return int(round(number / CLICK_COORD_ROUNDING) * CLICK_COORD_ROUNDING)
 
 
 def _normalized_signature(name: str, args: Dict[str, Any]) -> str:
@@ -200,7 +203,7 @@ def _append_history_log(record: AttemptRecord) -> None:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def _load_recent_history(limit: int = _HISTORY_CONTEXT_LIMIT) -> List[Dict[str, str]]:
+def _load_recent_history(limit: int = HISTORY_CONTEXT_LIMIT) -> List[Dict[str, str]]:
     if not os.path.exists(_HISTORY_LOG_PATH):
         return []
 
@@ -377,8 +380,7 @@ def is_goal_reached(goal: str, read_view: str) -> bool:
         return False
 
     hits = sum(1 for token in set(keywords) if token in combined)
-    threshold = 1 if len(keywords) <= 2 else 2
-    return hits >= threshold
+    return hits >= goal_keyword_hit_threshold(len(keywords))
 
 
 # ============================================================================
@@ -396,40 +398,7 @@ def _run_llm_planning(goal: str) -> str:
 
     model_id = get_model_id(client)
 
-    system_text = (
-        "You are an autonomous browser automation agent.\n"
-        "\n"
-        "Your job:\n"
-        "- Receive a high-level goal from the user.\n"
-        "- Think step-by-step.\n"
-        "- Use browser tools to explore and transform web pages.\n"
-        "- Adapt when actions fail (elements moved, labels changed, etc.).\n"
-        "- Never rely on hardcoded DOM structure or fixed selectors.\n"
-        "\n"
-        "Available tools (conceptually):\n"
-        "- dom_snapshot(): read the current page (title, url, visible text, buttons, links, inputs).\n"
-        "- click(selector): click an element chosen by you via CSS selector.\n"
-        "- click_by_text(text): find a clickable element by its visible text and click it.\n"
-        "- type_text(selector, text): type into an input or textarea.\n"
-        "- wait_for_dom_stable(): wait until the page finishes loading/updating.\n"
-        "- take_screenshot(full_page: bool): capture a screenshot of the current page when\n"
-        "  DOM summary is not enough to understand layout or visual state.\n"
-        "\n"
-        "Guidelines:\n"
-        "- First, open or focus the relevant website in the browser.\n"
-        "- Use dom_snapshot to understand what is on the screen.\n"
-        "- Decide what to do next based on the snapshot, then call a browser tool.\n"
-        "- After each important action, refresh your understanding (dom_snapshot again if needed).\n"
-        "- If an action fails, try an alternative approach (different text, different selector, scroll, etc.).\n"
-        "- Do NOT assume element ids/classes/paths — infer selectors dynamically from the page contents.\n"
-        "- Avoid sending large raw HTML into the context; work with summarized snapshots instead.\n"
-        "- Call take_screenshot only when DOM/text is confusing or you suspect a visual problem\n"
-        "  (e.g. cards visible but not clickable, unexpected layout).\n"
-        "\n"
-        "You must produce a short, numbered action plan:\n"
-        "- Each step describes what to inspect, click, or type on the page.\n"
-        "- The plan is not a rigid script: you are allowed to adapt if the page differs.\n"
-    )
+    system_text = PLANNING_SYSTEM_PROMPT
 
     messages = [
         {
@@ -809,7 +778,7 @@ def _autonomous_browse(
                 # Подпись действия для детектора циклов (нормализованные аргументы)
                 sig = _normalized_signature(call["name"], args)
                 recent_signatures.append(sig)
-                recent_signatures = recent_signatures[-_REPEAT_PATTERN_WINDOW:]
+                recent_signatures = recent_signatures[-REPEAT_PATTERN_WINDOW:]
                 if call["name"] == "read_view" and not waited_for_dom:
                     _wait_for_dom("before read_view")
                 if call["name"] == "open_url":
@@ -919,8 +888,8 @@ def _autonomous_browse(
                 # --- детектор повторяющихся паттернов ---
                 if (
                     last_strategy_hint_step != step_idx
-                    and recent_signatures.count(sig) >= _REPEAT_PATTERN_THRESHOLD
-                    and len(recent_signatures) >= _REPEAT_PATTERN_WINDOW // 2
+                    and recent_signatures.count(sig) >= REPEAT_PATTERN_THRESHOLD
+                    and len(recent_signatures) >= REPEAT_PATTERN_WINDOW // 2
                 ):
                     pending_messages.append(
                         {
