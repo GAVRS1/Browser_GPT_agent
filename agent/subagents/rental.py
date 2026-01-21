@@ -7,12 +7,34 @@ from loguru import logger
 from agent.subagents import BaseSubAgent, SubAgentResult
 
 
+RENTAL_CONTEXT_KEYWORDS: List[str] = [
+    "аренда",
+    "аренд",
+    "арендовать",
+    "снять",
+    "съем",
+    "съём",
+    "rent",
+    "rental",
+    "lease",
+]
+
+
+def _has_keyword(goal: str, keywords: List[str]) -> bool:
+    return any(keyword in goal for keyword in keywords)
+
+
+def _matches_rental_intent(goal: str, action_keywords: List[str]) -> bool:
+    lowered = goal.lower()
+    return _has_keyword(lowered, action_keywords) and _has_keyword(lowered, RENTAL_CONTEXT_KEYWORDS)
+
+
 class RentalSearchSubAgent(BaseSubAgent):
     """Подготовка поиска свободных слотов аренды."""
 
     name = "Поиск слотов аренды"
 
-    _keywords: List[str] = [
+    _action_keywords: List[str] = [
         "найди",
         "найти",
         "поиск",
@@ -25,17 +47,12 @@ class RentalSearchSubAgent(BaseSubAgent):
         "доступное время",
         "расписание",
         "свободн",
-        "аренда",
-        "бронь",
-        "брони",
-        "booking",
         "available slot",
         "availability",
     ]
 
     def matches(self, goal: str) -> bool:
-        lowered = goal.lower()
-        return any(k in lowered for k in self._keywords)
+        return _matches_rental_intent(goal, self._action_keywords)
 
     def run(self, goal: str, plan: str) -> SubAgentResult:
         logger.info("[rental] Preparing search workflow")
@@ -53,7 +70,7 @@ class RentalReservationSubAgent(BaseSubAgent):
 
     name = "Бронирование слота"
 
-    _keywords: List[str] = [
+    _action_keywords: List[str] = [
         "заброни",
         "бронь",
         "резерв",
@@ -68,8 +85,7 @@ class RentalReservationSubAgent(BaseSubAgent):
     ]
 
     def matches(self, goal: str) -> bool:
-        lowered = goal.lower()
-        return any(k in lowered for k in self._keywords)
+        return _matches_rental_intent(goal, self._action_keywords)
 
     def run(self, goal: str, plan: str) -> SubAgentResult:
         logger.info("[rental] Guiding reservation workflow")
@@ -87,7 +103,7 @@ class RentalPaymentSubAgent(BaseSubAgent):
 
     name = "Оплата аренды"
 
-    _keywords: List[str] = [
+    _action_keywords: List[str] = [
         "оплат",
         "плати",
         "оплата",
@@ -102,8 +118,7 @@ class RentalPaymentSubAgent(BaseSubAgent):
     ]
 
     def matches(self, goal: str) -> bool:
-        lowered = goal.lower()
-        return any(k in lowered for k in self._keywords)
+        return _matches_rental_intent(goal, self._action_keywords)
 
     def run(self, goal: str, plan: str) -> SubAgentResult:
         logger.info("[rental] Payment safeguards in place")
