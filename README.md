@@ -30,7 +30,6 @@ BROWSER_PROXY=false # включение/выключение прокси в б
 # =========================
 # НАВИГАЦИЯ И ПОИСК
 # =========================
-BROWSER_START_URL= # стартовый URL вместо поискового (опционально)
 SEARCH_URL_TEMPLATE= # URL шаблон поиска, например https://www.google.com/search?q={query}
 SEARCH_URL_MODE=auto # auto или url_template: использовать шаблон; form/disabled: искать через поле
 

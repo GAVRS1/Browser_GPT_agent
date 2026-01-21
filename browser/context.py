@@ -9,7 +9,7 @@ from loguru import logger
 from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
 
 from config.proxy import apply_requests_proxy, get_playwright_proxy, should_use_browser_proxy
-from config.sites import BROWSER_START_URL, SEARCH_URL_MODE, SEARCH_URL_TEMPLATE
+from config.sites import SEARCH_URL_MODE, SEARCH_URL_TEMPLATE
 
 # Глобальные объекты (единый браузер и контекст)
 _playwright: Optional[Playwright] = None
@@ -140,7 +140,7 @@ def get_page() -> Page:
 
     context = get_context()
     search_url_allowed = SEARCH_URL_MODE not in {"form", "field", "disabled", "off", "false"}
-    start_url = BROWSER_START_URL or (SEARCH_URL_TEMPLATE if search_url_allowed else None)
+    start_url = SEARCH_URL_TEMPLATE if search_url_allowed else None
 
     if context.pages:
         page = context.pages[0]
