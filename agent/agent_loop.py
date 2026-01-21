@@ -4,6 +4,7 @@ import json
 import re
 import threading
 import time
+from urllib.parse import urlparse, urlunparse
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -85,7 +86,57 @@ _console_confirmation_enabled = False
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _AGENT_STATE_DIR = os.path.join(_ROOT_DIR, "agent_state")
 _HISTORY_LOG_PATH = os.path.join(_AGENT_STATE_DIR, "history.log")
-_HISTORY_CONTEXT_LIMIT = 5
+_HISTORY_CONTEXT_LIMIT = 12
+
+_CLICK_COORD_ROUNDING = 5
+_REPEAT_PATTERN_WINDOW = 8
+_REPEAT_PATTERN_THRESHOLD = 4
+
+
+def _normalize_text_value(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    normalized = re.sub(r"\s+", " ", value).strip().lower()
+    return normalized
+
+
+def _normalize_url_value(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    raw = value.strip()
+    parsed = urlparse(raw)
+    if not parsed.scheme and not parsed.netloc:
+        return _normalize_text_value(raw)
+    scheme = (parsed.scheme or "").lower()
+    netloc = (parsed.netloc or "").lower()
+    path = re.sub(r"/+$", "", parsed.path or "")
+    return urlunparse((scheme, netloc, path, "", parsed.query or "", ""))
+
+
+def _round_coord(value: Any) -> Optional[int]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(round(number / _CLICK_COORD_ROUNDING) * _CLICK_COORD_ROUNDING)
+
+
+def _normalized_signature(name: str, args: Dict[str, Any]) -> str:
+    normalized_args: Dict[str, Any] = dict(args)
+    if name == "click":
+        rounded_x = _round_coord(normalized_args.get("x"))
+        rounded_y = _round_coord(normalized_args.get("y"))
+        if rounded_x is not None:
+            normalized_args["x"] = rounded_x
+        if rounded_y is not None:
+            normalized_args["y"] = rounded_y
+    elif name == "type_text":
+        normalized_args["text"] = _normalize_text_value(normalized_args.get("text"))
+    elif name == "open_url":
+        normalized_args["url"] = _normalize_url_value(normalized_args.get("url"))
+
+    normalized_json = json.dumps(normalized_args, sort_keys=True, ensure_ascii=False)
+    return f"{name}:{normalized_json}"
 
 # ============================================================================
 # State helpers
@@ -498,6 +549,7 @@ def _autonomous_browse(
 
     # АНТИ-ЗАЦИКЛИВАНИЕ
     recent_signatures: List[str] = []  # история последних действий (имя + аргументы)
+    last_strategy_hint_step: Optional[int] = None
     no_progress_steps = 0              # шаги подряд без изменения наблюдения
     stall_cycles = 0                  # сколько раз подряд ловили "нет прогресса"
     last_observation = observation     # последнее observation, чтобы сравнивать
@@ -734,16 +786,16 @@ def _autonomous_browse(
                     )
                     continue
 
-                # Подпись действия для детектора циклов
-                sig = f"{call['name']}:{call['arguments']}"
-                recent_signatures.append(sig)
-                recent_signatures = recent_signatures[-6:]
-
                 # Логирование использования инструмента
                 logger.info(f"[agent] Using tool: {call['name']} args={call['arguments']}")
 
                 # ВЫПОЛНЯЕМ инструмент до использования result
                 args = json.loads(call["arguments"] or "{}")
+
+                # Подпись действия для детектора циклов (нормализованные аргументы)
+                sig = _normalized_signature(call["name"], args)
+                recent_signatures.append(sig)
+                recent_signatures = recent_signatures[-_REPEAT_PATTERN_WINDOW:]
                 if call["name"] == "read_view" and not waited_for_dom:
                     _wait_for_dom("before read_view")
                 if call["name"] == "open_url":
@@ -845,6 +897,24 @@ def _autonomous_browse(
                         "output": result.observation,
                     }
                 )
+
+                # --- детектор повторяющихся паттернов ---
+                if (
+                    last_strategy_hint_step != step_idx
+                    and recent_signatures.count(sig) >= _REPEAT_PATTERN_THRESHOLD
+                    and len(recent_signatures) >= _REPEAT_PATTERN_WINDOW // 2
+                ):
+                    pending_messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Повторяются одни и те же действия — измени стратегию. "
+                                "Попробуй другой инструмент, другой элемент или новый подход."
+                            ),
+                        }
+                    )
+                    last_strategy_hint_step = step_idx
+                    recent_signatures.clear()
 
                 # --- детектор зацикливания по одинаковому инструменту ---
                 if len(recent_signatures) >= 3 and len(set(recent_signatures[-3:])) == 1:
