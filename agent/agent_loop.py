@@ -33,7 +33,7 @@ from config.prompt_templates import (
     compose_prompt,
 )
 from config.proxy import get_proxy_url
-from config.sites import AGENT_CONFIRMATION_TIMEOUT, SEARCH_URL_TEMPLATE
+from config.sites import AGENT_CONFIRMATION_TIMEOUT, MAX_CYCLES, SEARCH_URL_TEMPLATE
 
 @dataclass
 class AttemptRecord:
@@ -687,7 +687,7 @@ def _autonomous_browse(
         return "completed", _build_final_report(final_text)
 
     # Лимит шагов, чтобы не крутиться бесконечно
-    for step_idx in range(30):
+    for step_idx in range(MAX_CYCLES):
         reminder = screenshot_cache.reminder_message()
         if reminder:
             pending_messages.append(reminder)
