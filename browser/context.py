@@ -1,16 +1,14 @@
+import os
 import time
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 import playwright
 from loguru import logger
 from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
 
-from config.proxy import (
-    apply_requests_proxy,
-    get_proxy_url,
-    should_use_browser_proxy,
-)
+from config.proxy import apply_requests_proxy, get_playwright_proxy, should_use_browser_proxy
 from config.sites import BROWSER_START_URL, SEARCH_URL_MODE, SEARCH_URL_TEMPLATE
 
 # Глобальные объекты (единый браузер и контекст)
@@ -27,6 +25,22 @@ USER_DATA_DIR = PROJECT_ROOT / "user_data"
 # ============================================================
 
 
+@contextmanager
+def _temporary_clear_proxy_env() -> Iterator[None]:
+    proxy_env_keys = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+    saved = {key: os.environ.get(key) for key in proxy_env_keys}
+    for key in proxy_env_keys:
+        os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _launch_context(playwright: Playwright, use_proxy: bool) -> BrowserContext:
     """
     Внутренняя функция запуска браузера.
@@ -35,10 +49,9 @@ def _launch_context(playwright: Playwright, use_proxy: bool) -> BrowserContext:
 
     proxy_settings = None
     if use_proxy:
-        proxy_url = get_proxy_url()
-        if proxy_url:
-            proxy_settings = {"server": proxy_url}
-            logger.info(f"[browser] Starting Chromium WITH proxy: {proxy_url}")
+        proxy_settings = get_playwright_proxy()
+        if proxy_settings:
+            logger.info(f"[browser] Starting Chromium WITH proxy: {proxy_settings['server']}")
         else:
             logger.info("[browser] BROWSER_PROXY enabled, но URL не получен – запускаем без прокси")
     else:
@@ -47,18 +60,20 @@ def _launch_context(playwright: Playwright, use_proxy: bool) -> BrowserContext:
     USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     # Запуск persistent контекста
-    context = playwright.chromium.launch_persistent_context(
-        user_data_dir=str(USER_DATA_DIR),
-        headless=False,
-        proxy=proxy_settings,
-        args=[
-            "--disable-blink-features=AutomationControlled",
-            "--disable-infobars",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--force-renderer-accessibility",
-        ],
-    )
+    launch_context = _temporary_clear_proxy_env() if not use_proxy else nullcontext()
+    with launch_context:
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir=str(USER_DATA_DIR),
+            headless=False,
+            proxy=proxy_settings,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--force-renderer-accessibility",
+            ],
+        )
 
     logger.info(f"[browser] Persistent profile dir: {USER_DATA_DIR}")
     return context
