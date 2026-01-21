@@ -41,6 +41,7 @@ BROWSER_INPUT_VALUE_TIMEOUT_MS=800
 BROWSER_BUTTON_ENABLED_TIMEOUT_MS=800
 BROWSER_NAVIGATION_RETRY_MIN_TIMEOUT_MS=15000
 AGENT_CONFIRMATION_TIMEOUT=60
+MAX_CYCLES=30
 SEARCH_URL_TEMPLATE= # URL шаблон поиска, например https://www.google.com/search?q={query}
 SEARCH_URL_MODE=auto # auto или url_template: использовать шаблон; form/disabled: искать через поле
 ```

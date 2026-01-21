@@ -29,3 +29,6 @@ SEARCH_URL_MODE: str = os.getenv("SEARCH_URL_MODE", "auto").strip().lower()
 # Время ожидания подтверждения рискованных действий.
 # Не привязываемся к сайтам, чтобы архитектура оставалась универсальной.
 AGENT_CONFIRMATION_TIMEOUT: float = _read_env(float, "AGENT_CONFIRMATION_TIMEOUT", 60.0)
+
+# Максимальное число циклов агента (предохранитель от бесконечных запусков).
+MAX_CYCLES: int = _read_env(int, "MAX_CYCLES", 30)
