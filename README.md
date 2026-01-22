@@ -105,15 +105,15 @@ AGENT_DEBUG_THOUGHTS=0 # 1 чтобы вывести полные мысли а�
     agent_loop.py
     browser_tools.py
     debug_thoughts.py
+    console_status.py
     llm_client.py
+    risk_guard.py
+    tool_client.py
     tools_init.py
-    subagents/
-        base.py
-        rental.py
-        utils.py
 /browser
     context.py
 /config
+    constants.py
     prompt_templates.py
     proxy.py
     sites.py
@@ -124,3 +124,28 @@ install.bat
 start.bat
 Chrome.bat
 ```
+
+## 🧩 Константы и где их настраивать
+Файл `config/constants.py` содержит общие константы с возможностью переопределения
+через переменные окружения. Все значения читаются из `.env` (или окружения) и
+имеют разумные дефолты. Основные группы:
+
+- **Контекст и анти-зацикливание**: `AGENT_HISTORY_CONTEXT_LIMIT`,
+  `AGENT_REPEAT_PATTERN_WINDOW`, `AGENT_REPEAT_PATTERN_THRESHOLD`,
+  `BROWSER_CLICK_COORD_ROUNDING`.
+- **Определение достижения цели по ключевым словам**:
+  `AGENT_GOAL_KEYWORD_SHORT_MAX`, `AGENT_GOAL_KEYWORD_HITS_SHORT`,
+  `AGENT_GOAL_KEYWORD_HITS_LONG`.
+- **Пороговые значения карточек**: `BROWSER_CARD_MIN_WIDTH`,
+  `BROWSER_CARD_MIN_HEIGHT`, `BROWSER_CARD_MIN_AREA`,
+  `BROWSER_CARD_BIG_COUNT_THRESHOLD`.
+- **Лимиты обработки карточек**: `BROWSER_CARD_MAX_CHECK_READ`,
+  `BROWSER_CARD_MAX_CHECK_SCROLL`, `BROWSER_CARD_MAX_CHECK_CLICK`,
+  `BROWSER_CARD_OUTPUT_LIMIT`.
+- **Параметры скролла и скоринга**: `BROWSER_SCROLL_AMOUNT`,
+  `BROWSER_CARD_SCORE_PRICE_BONUS`, `BROWSER_CARD_SCORE_TITLE_BONUS`,
+  `BROWSER_CARD_SCORE_ADD_BUTTON_BONUS`, `BROWSER_CARD_SCORE_TOKEN_BONUS`,
+  `BROWSER_CARD_SCORE_RECIPE_PENALTY`.
+
+Если нужно изменить поведение, добавьте/измените соответствующую переменную в `.env`
+— код автоматически подхватит её при запуске.
